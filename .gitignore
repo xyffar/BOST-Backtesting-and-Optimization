@@ -1,6 +1,9 @@
-.vscode/
+#.vscode/
 __pycache__/
 venv/
 *.pyc
 .env
 *.log
+Backups.zip
+Ticker_lists.xlsx
+time_logs.xlsx
