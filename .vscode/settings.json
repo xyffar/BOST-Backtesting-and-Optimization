@@ -1,0 +1,22 @@
+{
+    "python.defaultInterpreterPath": "C:\\Users\\raffa\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
+    "workbench.editorAssociations": {
+        "*.xlsx": "gc-excelviewer-excel-editor"
+    },
+    "launch": {
+        "configurations": []
+    },
+    "editor.formatOnSave": true,
+    "editor.definitionLinkOpensInPeek": true,
+    "flake8.args": [
+        "--max-line-length=100",
+        "--extend-ignore=E203,W503"
+    ],
+    "[python]": {
+        "editor.defaultFormatter": "charliermarsh.ruff",
+        "editor.formatOnSave": true,
+        "editor.codeActionsOnSave": {
+            "source.sortImports": "explicit"
+        }
+    },
+}

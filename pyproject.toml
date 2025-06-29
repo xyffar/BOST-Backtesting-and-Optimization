@@ -1,0 +1,53 @@
+# pyproject.toml
+[tool.ruff]
+# Applica automaticamente le correzioni dove possibile
+fix = true
+# Percorso base per la risoluzione dei percorsi relativi
+target-version = "py310" # o la tua versione di Python (es. "py38", "py39")
+line-length = 120 # Lunghezza massima della riga
+
+# Sezioni specifiche per il linter (ruff lint)
+[tool.ruff.lint]
+select = [ # Regole da includere
+    "E",   # errori di pycodestyle
+    "W",   # warning di pycodestyle
+    "F",   # errori di Pyflakes
+    "C90", # complessità ciclica (flake8-comprehensions)
+    "I",   # import (isort)
+    "N",   # naming conventions (pep8-naming)
+    "D",   # docstring style (pydocstyle) - ATTENZIONE: può essere molto verboso
+    "UP",  # modernizzazione del codice (pyupgrade)
+    "B",   # bug (flake8-bugbear)
+    "ANN", # type annotations (flake8-annotations)
+    "ASYNC", # asynchronos code (flake8-async)
+    "Q",   # quote style (flake8-quotes)
+    "RUF", # regole specifiche di Ruff
+]
+ignore = [ # Regole da ignorare specificamente
+    "E501", # Già coperta da `line-length`
+    "D100", # Ignora docstring mancanti per i moduli
+    "D104", # Ignora docstring mancanti per i package
+    "ANN101", # Ignora l'assenza di type hints per `self` nelle classi
+    "ANN102", # Ignora l'assenza di type hints per `cls` nelle classi
+    "RUF001", # Ignora errori di encoding se non rilevanti per te
+    "UP038", # Ignora isinstance con (X,Y) anziché X|Y
+]
+
+# File da escludere dal linting (glob patterns)
+exclude = [
+    ".git",
+    "__pycache__",
+    "build",
+    "dist",
+    "venv",
+    ".mypy_cache",
+    ".pytest_cache",
+    "*.ipynb", # Jupyter notebooks
+    "*.html",
+]
+
+# Impostazioni specifiche per il formatter (ruff format)
+[tool.ruff.format]
+# Queste sono spesso ereditate da [tool.ruff], ma puoi sovrascriverle
+quote-style = "double" # Stile delle virgolette: "double" o "single"
+indent-style = "space" # Stile dell'indentazione: "space" o "tab"
