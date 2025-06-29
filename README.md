@@ -10,7 +10,7 @@
 
 **A powerful, user-friendly platform for backtesting and optimizing trading strategies**
 
-[Features](#-features) • [Quick Start](#-quick-start) • [Installation](#-installation) • [Usage](#-usage) • [Strategies](#-strategies) • [Documentation](#-documentation)
+[Features](#-features) • [Quick Start](#-quick-start) • [Installation](#-installation) • [Usage](#-usage) • [Strategies](#-strategies)
 
 </div>
 
