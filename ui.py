@@ -389,8 +389,6 @@ def make_body_optimization_mode(
             opt_results_container,
         )
 
-        render_opt_button_and_pars_combs(optimization_params_ranges, args_for_opt)
-
     with opt_infos_container:
         (
         download_progress_placeholder,
@@ -401,6 +399,13 @@ def make_body_optimization_mode(
         run_fail_placeholder,
         ) = create_opt_info_area(opt_infos_container)
 
+        
+        render_opt_button_and_pars_combs(optimization_params_ranges, args_for_opt.append(download_progress_placeholder,
+                                                                                         download_success_placeholder,
+                                                                                         run_progress_placeholder,
+                                                                                         run_success_placeholder,
+                                                                                         download_fail_placeholder,
+                                                                                         run_fail_placeholder))
 
 
 @st.fragment
@@ -452,12 +457,12 @@ def _render_all_opt_settings(
         run_wfo,
         wfo_n_cycles,
         wfo_oos_ratio,
-        download_progress_placeholder,
-        download_success_placeholder,
-        run_progress_placeholder,
-        run_success_placeholder,
-        download_fail_placeholder,
-        run_fail_placeholder,
+        # download_progress_placeholder,
+        # download_success_placeholder,
+        # run_progress_placeholder,
+        # run_success_placeholder,
+        # download_fail_placeholder,
+        # run_fail_placeholder,
         ]
 
     return args_for_opt
