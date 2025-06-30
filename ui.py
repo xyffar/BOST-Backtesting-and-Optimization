@@ -389,8 +389,21 @@ def make_body_optimization_mode(
             opt_results_container,
         )
 
+    with opt_infos_container:
+        (
+        download_progress_placeholder,
+        download_success_placeholder,
+        run_progress_placeholder,
+        run_success_placeholder,
+        download_fail_placeholder,
+        run_fail_placeholder,
+        ) = create_opt_info_area()
+    
+    with opt_results_container:
+        if st.session_state.opt_results_generated:
+            display_results_opt()
 
-@st.fragment
+
 def _render_all_opt_settings(
     tickers: list[str],
     start_date: str,
@@ -417,14 +430,6 @@ def _render_all_opt_settings(
     strat_class: type[CommonStrategy] = st.session_state.all_strategies[selected_strategy_name]
     optimization_params_ranges: dict[str : list | range] = render_optimization_params(strat_class)
 
-    (
-        download_progress_placeholder,
-        download_success_placeholder,
-        run_progress_placeholder,
-        run_success_placeholder,
-        download_fail_placeholder,
-        run_fail_placeholder,
-    ) = create_opt_info_area(opt_infos_container)
 
     args_for_opt = [
         tickers,
@@ -722,7 +727,7 @@ def render_opt_wfo_settings() -> tuple[bool, int, float]:
     return run_wfo, wfo_n_cycles, wfo_oos_ratio
 
 
-def create_opt_info_area(opt_infos_container: st.delta_generator.DeltaGenerator) -> tuple:
+def create_opt_info_area(opt_infos_container: streamlit_obj) -> tuple:
     """Create and return placeholders for optimization info messages in the UI.
 
     Sets up columns and placeholders for progress, success, and failure messages during optimization.
@@ -734,18 +739,17 @@ def create_opt_info_area(opt_infos_container: st.delta_generator.DeltaGenerator)
         tuple: Placeholders for download progress, download success, run progress, run success, download failure, and run failure.
 
     """
-    with opt_infos_container:
-        # Placeholders for dynamic messages
-        col_progress, col_success, col_failed = st.columns(3)
-        with col_progress:
-            download_progress_placeholder = st.empty()
-            download_success_placeholder = st.empty()
-        with col_success:
-            run_progress_placeholder = st.empty()
-            run_success_placeholder = st.empty()
-        with col_failed:
-            download_fail_placeholder = st.empty()
-            run_fail_placeholder = st.empty()  # For backtest/optimization success/failure messages
+    # Placeholders for dynamic messages
+    col_progress, col_success, col_failed = st.columns(3)
+    with col_progress:
+        download_progress_placeholder = st.empty()
+        download_success_placeholder = st.empty()
+    with col_success:
+        run_progress_placeholder = st.empty()
+        run_success_placeholder = st.empty()
+    with col_failed:
+        download_fail_placeholder = st.empty()
+        run_fail_placeholder = st.empty()  # For backtest/optimization success/failure messages
 
     return (
         download_progress_placeholder,
