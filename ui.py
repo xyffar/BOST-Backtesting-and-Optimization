@@ -743,18 +743,17 @@ def create_opt_info_area(opt_infos_container: st.delta_generator.DeltaGenerator)
         tuple: Placeholders for download progress, download success, run progress, run success, download failure, and run failure.
 
     """
-    with opt_infos_container:
-        # Placeholders for dynamic messages
-        col_progress, col_success, col_failed = st.columns(3)
-        with col_progress:
-            download_progress_placeholder = st.empty()
-            download_success_placeholder = st.empty()
-        with col_success:
-            run_progress_placeholder = st.empty()
-            run_success_placeholder = st.empty()
-        with col_failed:
-            download_fail_placeholder = st.empty()
-            run_fail_placeholder = st.empty()  # For backtest/optimization success/failure messages
+    # Placeholders for dynamic messages
+    col_progress, col_success, col_failed = st.columns(3)
+    with col_progress:
+        download_progress_placeholder = st.empty()
+        download_success_placeholder = st.empty()
+    with col_success:
+        run_progress_placeholder = st.empty()
+        run_success_placeholder = st.empty()
+    with col_failed:
+        download_fail_placeholder = st.empty()
+        run_fail_placeholder = st.empty()  # For backtest/optimization success/failure messages
 
     return (
         download_progress_placeholder,
