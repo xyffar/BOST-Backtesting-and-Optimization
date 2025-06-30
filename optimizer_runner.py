@@ -701,20 +701,20 @@ def start_optimization_process(
                         ticker,
                         all_comb_data,
                     )
-                    cycles_summary, combs_stats = initiate_wfo(
-                        data,
-                        strat_class,
-                        optimization_params_ranges,
-                        objective_function_selection,
-                        optimization_method_selection,
-                        initial_capital,
-                        commission_percent,
-                        max_tries_sambo,
-                        run_wfo,
-                        wfo_n_cycles,
-                        wfo_oos_ratio,
-                        all_comb_data[all_comb_data.columns[:-1]],
-                    )  # Passiamogli la lista delle combinazioni provate
+                    # cycles_summary, combs_stats = initiate_wfo(
+                    #     data,
+                    #     strat_class,
+                    #     optimization_params_ranges,
+                    #     objective_function_selection,
+                    #     optimization_method_selection,
+                    #     initial_capital,
+                    #     commission_percent,
+                    #     max_tries_sambo,
+                    #     run_wfo,
+                    #     wfo_n_cycles,
+                    #     wfo_oos_ratio,
+                    #     all_comb_data[all_comb_data.columns[:-1]],
+                    # )  # Passiamogli la lista delle combinazioni provate
 
                 manage_opt_run_infos(
                     all_ticker_results,
