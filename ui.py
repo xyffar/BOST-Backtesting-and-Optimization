@@ -400,7 +400,7 @@ def make_body_optimization_mode(
         ) = create_opt_info_area(opt_infos_container)
 
         
-        render_opt_button_and_pars_combs(optimization_params_ranges, args_for_opt.append(download_progress_placeholder,
+        render_opt_button_and_pars_combs(optimization_params_ranges[15], args_for_opt.append(download_progress_placeholder,
                                                                                          download_success_placeholder,
                                                                                          run_progress_placeholder,
                                                                                          run_success_placeholder,
