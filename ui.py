@@ -305,7 +305,6 @@ def make_body_backtesting_mode(
         )
 
 
-@st.fragment
 def _render_all_backtesting_settings(
     tickers: list[str],
     start_date_yf: str,
@@ -408,7 +407,6 @@ def make_body_optimization_mode(
                                                                                          run_fail_placeholder])
 
 
-@st.fragment
 def _render_all_opt_settings(
     tickers: list[str],
     start_date: str,
