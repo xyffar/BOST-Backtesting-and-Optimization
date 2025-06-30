@@ -3,7 +3,7 @@
 import streamlit as st
 
 # Import DISPLAY_TEXTS and CUSTOM_CSS
-from config import MESSAGES
+from config import MESSAGES, session_state_names
 from ui import (
     make_body_backtesting_mode,
     make_body_optimization_mode,
@@ -11,6 +11,15 @@ from ui import (
     show_subheader_according_to_mode,
 )
 from utils import load_strategies
+
+
+def initialize_session_states():
+    for name in session_state_names:
+        if name not in st.session_state:
+            st.session_state[name] = None
+
+
+initialize_session_states()
 
 st.session_state.all_strategies = load_strategies()
 
