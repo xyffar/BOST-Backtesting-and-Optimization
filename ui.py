@@ -391,7 +391,7 @@ def make_body_optimization_mode(
 
         render_opt_button_and_pars_combs(optimization_params_ranges, args_for_opt)
 
-with opt_infos_container:
+    with opt_infos_container:
         (
         download_progress_placeholder,
         download_success_placeholder,
