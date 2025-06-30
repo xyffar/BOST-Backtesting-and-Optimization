@@ -437,8 +437,6 @@ def run_optimization(
             None,
             None,
             None,
-            None,
-            None,
             "failure",
             MESSAGES["display_texts"]["optimizer_runner"]["no_data_for_optimization"],
         )
@@ -455,7 +453,7 @@ def run_optimization(
     try:
         maximize = MESSAGES["optimization_settings"]["objectives"].get(objective_function_key)
     except ValueError as ve:
-        return None, None, None, None, None, "failure", str(ve)
+        return None, None, None, "failure", str(ve)
 
     # 3. Prepara i range dei parametri per backtesting.py
     processed_params: dict[str, list[Any] | Any] = _process_params_ranges(params_ranges)
@@ -481,8 +479,6 @@ def run_optimization(
                 None,
                 None,
                 None,
-                None,
-                None,
                 "failure",
                 MESSAGES["display_texts"]["optimizer_runner"]["no_valid_results"],
             )
@@ -492,8 +488,6 @@ def run_optimization(
             isinstance(optimization_output, tuple) and (optimization_output[0] is None or optimization_output[0].empty)
         ) or (isinstance(optimization_output, pd.Series) and optimization_output.empty):
             return (
-                None,
-                None,
                 None,
                 None,
                 None,
@@ -526,8 +520,6 @@ def run_optimization(
                 None,
                 None,
                 None,
-                None,
-                None,
                 "failure",
                 MESSAGES["display_texts"]["optimizer_runner"]["no_valid_results"],
             )
@@ -542,12 +534,10 @@ def run_optimization(
 
     except ValueError as ve:
         # Gestione specifica degli errori di valore (es. problemi di configurazione)
-        return None, None, None, None, None, "failure", str(ve)
+        return None, None, None, "failure", str(ve)
     except Exception as e:
         # Gestione generica degli errori per problemi inaspettati durante l'ottimizzazione
         return (
-            None,
-            None,
             None,
             None,
             None,
