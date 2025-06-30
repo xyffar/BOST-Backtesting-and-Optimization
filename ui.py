@@ -378,7 +378,7 @@ def make_body_optimization_mode(
 
     with opt_settings_container:
         # Mostra le importazioni per l'ottimizzazione
-        _render_all_opt_settings(
+        args_for_opt = _render_all_opt_settings(
             tickers,
             start_date,
             end_date,
@@ -388,6 +388,19 @@ def make_body_optimization_mode(
             opt_infos_container,
             opt_results_container,
         )
+
+        render_opt_button_and_pars_combs(optimization_params_ranges, args_for_opt)
+
+with opt_infos_container:
+        (
+        download_progress_placeholder,
+        download_success_placeholder,
+        run_progress_placeholder,
+        run_success_placeholder,
+        download_fail_placeholder,
+        run_fail_placeholder,
+        ) = create_opt_info_area(opt_infos_container)
+
 
 
 @st.fragment
@@ -400,7 +413,7 @@ def _render_all_opt_settings(
     commission_percent: float,
     opt_infos_container: streamlit_obj,
     opt_results_container: streamlit_obj,
-) -> None:
+) -> list:
     (
         selected_strategy_name,
         objective_function_selection,
@@ -417,14 +430,6 @@ def _render_all_opt_settings(
     strat_class: type[CommonStrategy] = st.session_state.all_strategies[selected_strategy_name]
     optimization_params_ranges: dict[str : list | range] = render_optimization_params(strat_class)
 
-    (
-        download_progress_placeholder,
-        download_success_placeholder,
-        run_progress_placeholder,
-        run_success_placeholder,
-        download_fail_placeholder,
-        run_fail_placeholder,
-    ) = create_opt_info_area(opt_infos_container)
 
     args_for_opt = [
         tickers,
@@ -453,10 +458,9 @@ def _render_all_opt_settings(
         run_success_placeholder,
         download_fail_placeholder,
         run_fail_placeholder,
-    ]
+        ]
 
-    render_opt_button_and_pars_combs(optimization_params_ranges, args_for_opt)
-
+    return args_for_opt
 
 def render_opt_button_and_pars_combs(
     optimization_params_ranges: dict[str, list | range],
