@@ -9,6 +9,18 @@ from openpyxl.styles import Border, Font, PatternFill, Side
 
 streamlit_obj = type[st.delta_generator.DeltaGenerator]
 
+session_state_names = ('mode', 'all_strategies', 'successful_downloads_tickers', 'failed_downloads_tickers', 'successful_runs_tickers',
+                       'failed_runs_tickers', 'backtest_comp_with_benchmark_df', 'backtest_interactive_plot', 'backtest_trade_list',
+                       'backtest_mc_percentile', 'backtest_mc_probs_benchmark', 'backtest_mc_equity_lines_plot', 'backtest_mc_var_plot',
+                       'backtest_mc_returns_plot', 'backtest_excel', 'opt_mc_results', 'opt_heatmaps', 'opt_sambo_plots', 'opt_combs_ranking'
+                      )
+
+def initialize_session_states():
+    for name in session_state_names:
+        if name not in st.session_state:
+            st.session_state[name] = None
+
+
 # FOLDER_STRATS = "strategies"
 
 # # --- Global Default Parameters (only non-optimizable ones) ---
