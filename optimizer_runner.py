@@ -629,16 +629,16 @@ def start_optimization_process(
     else:
         all_ticker_results = {}
 
-    # results_container = st.empty()
-    # download_progress_placeholder = st.empty()
-    # download_success_placeholder = st.empty()
-    # run_progress_placeholder = st.empty()
-    # run_success_placeholder = st.empty()
-    # download_fail_placeholder = st.empty()
-    # run_fail_placeholder = st.empty()
+    results_container = st.empty()
+    download_progress_placeholder = st.empty()
+    download_success_placeholder = st.empty()
+    run_progress_placeholder = st.empty()
+    run_success_placeholder = st.empty()
+    download_fail_placeholder = st.empty()
+    run_fail_placeholder = st.empty()
 
     download_progress_placeholder.container()
-    download_success_placeholder.empty()
+    download_success_placeholder.container()
     download_success_placeholder.container()
     run_progress_placeholder.container()
     run_success_placeholder.container()
