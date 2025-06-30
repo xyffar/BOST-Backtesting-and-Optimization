@@ -72,7 +72,7 @@ display_texts: # Testi visualizzati per gli elementi UI
     execution_failed: "Execution failed for: "
     running_optimization: "Optimization in progress for {ticker} ({current_idx}/{total_tickers})... This will take time!"
     no_results_to_show: "Nessun risultato da mostrare."
-    results_for_ticker: "Resultas for {ticker}"
+    results_for_ticker: "Results for {ticker}"
     param_display_min: "Min"
     param_display_max: "Max"
     param_display_step: "Step"

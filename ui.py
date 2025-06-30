@@ -159,7 +159,6 @@ def make_sidebar() -> tuple[list[str], str, str, str, float, float]:
     )
 
 
-@st.fragment
 def render_strategy_params(
     strategy_name: str,
     backtest_params_container: streamlit_obj,
@@ -289,20 +288,41 @@ def make_body_backtesting_mode(
 
     """
     backtest_settings_container = st.container()
-    st.subheader(MESSAGES["display_texts"]["strategy_params_subheader"])  # Specific heading for strategy parameters
-    backtest_params_container = st.container()
+    # backtest_params_container = st.container()
     backtest_results_container = st.container()
 
     with backtest_settings_container:
-        (selected_strategy_name, run_mc, mc_sampling_method, sims_length, num_sims) = render_backtest_settings(
-            st.session_state.all_strategies, backtest_settings_container
+        st.subheader(MESSAGES["display_texts"]["strategy_params_subheader"])  # Specific heading for strategy parameters
+        _render_all_backtesting_settings(
+            tickers,
+            start_date_yf,
+            end_date_yf,
+            data_interval,
+            initial_capital,
+            commission_percent,
+            backtest_settings_container,
+            backtest_results_container,
         )
 
-    # Strategy Parameters (dynamic and visible only in Backtest)
-    with backtest_params_container:
-        strategy_params: dict[str : int | float | str | bool] = render_strategy_params(
-            selected_strategy_name, backtest_params_container
-        )
+
+@st.fragment
+def _render_all_backtesting_settings(
+    tickers: list[str],
+    start_date_yf: str,
+    end_date_yf: str,
+    data_interval: str,
+    initial_capital: float,
+    commission_percent: float,
+    backtest_settings_container: streamlit_obj,
+    backtest_results_container: streamlit_obj,
+) -> None:
+    (selected_strategy_name, run_mc, mc_sampling_method, sims_length, num_sims) = render_backtest_settings(
+        st.session_state.all_strategies, backtest_settings_container
+    )
+
+    strategy_params: dict[str : int | float | str | bool] = render_strategy_params(
+        selected_strategy_name, backtest_settings_container
+    )
 
     args_for_backtest = [
         tickers,
@@ -320,13 +340,12 @@ def make_body_backtesting_mode(
         backtest_results_container,
     ]
 
-    with backtest_params_container:
-        st.button(
-            MESSAGES["display_texts"]["run_backtest_button"],
-            key="run_backtest_button",
-            on_click=start_backtest_process,
-            args=args_for_backtest,
-        )
+    st.button(
+        MESSAGES["display_texts"]["run_backtest_button"],
+        key="run_backtest_button",
+        on_click=start_backtest_process,
+        args=args_for_backtest,
+    )
 
 
 def make_body_optimization_mode(
@@ -359,61 +378,84 @@ def make_body_optimization_mode(
 
     with opt_settings_container:
         # Mostra le importazioni per l'ottimizzazione
-        (
-            selected_strategy_name,
-            objective_function_selection,
-            optimization_method_selection,
-            max_tries_sambo,
-        ) = render_opt_settings()
-
-        # Mostra le impostazioni per il Monte Carlo dell'ottimizzazione
-        run_mc, promoted_combinations, mc_sampling_method, num_sims, sims_length = render_opt_mc_settings()
-
-        # Mostra le impostazioni per la Walk Forward Optimization
-        run_wfo, wfo_n_cycles, wfo_oos_ratio = render_opt_wfo_settings()
-
-        strat_class: type[CommonStrategy] = st.session_state.all_strategies[selected_strategy_name]
-        optimization_params_ranges: dict[str : list | range] = render_optimization_params(strat_class)
-
-        (
-            download_progress_placeholder,
-            download_success_placeholder,
-            run_progress_placeholder,
-            run_success_placeholder,
-            download_fail_placeholder,
-            run_fail_placeholder,
-        ) = create_opt_info_area(opt_infos_container)
-
-        args_for_opt = [
+        _render_all_opt_settings(
             tickers,
             start_date,
             end_date,
             data_interval,
             initial_capital,
             commission_percent,
-            objective_function_selection,
-            optimization_method_selection,
-            max_tries_sambo,
-            run_mc,
-            promoted_combinations,
-            mc_sampling_method,
-            num_sims,
-            sims_length,
-            strat_class,
-            optimization_params_ranges,
+            opt_infos_container,
             opt_results_container,
-            run_wfo,
-            wfo_n_cycles,
-            wfo_oos_ratio,
-            download_progress_placeholder,
-            download_success_placeholder,
-            run_progress_placeholder,
-            run_success_placeholder,
-            download_fail_placeholder,
-            run_fail_placeholder,
-        ]
+        )
 
-        render_opt_button_and_pars_combs(optimization_params_ranges, args_for_opt)
+
+@st.fragment
+def _render_all_opt_settings(
+    tickers: list[str],
+    start_date: str,
+    end_date: str,
+    data_interval: str,
+    initial_capital: float,
+    commission_percent: float,
+    opt_infos_container: streamlit_obj,
+    opt_results_container: streamlit_obj,
+) -> None:
+    (
+        selected_strategy_name,
+        objective_function_selection,
+        optimization_method_selection,
+        max_tries_sambo,
+    ) = render_opt_settings()
+
+    # Mostra le impostazioni per il Monte Carlo dell'ottimizzazione
+    run_mc, promoted_combinations, mc_sampling_method, num_sims, sims_length = render_opt_mc_settings()
+
+    # Mostra le impostazioni per la Walk Forward Optimization
+    run_wfo, wfo_n_cycles, wfo_oos_ratio = render_opt_wfo_settings()
+
+    strat_class: type[CommonStrategy] = st.session_state.all_strategies[selected_strategy_name]
+    optimization_params_ranges: dict[str : list | range] = render_optimization_params(strat_class)
+
+    (
+        download_progress_placeholder,
+        download_success_placeholder,
+        run_progress_placeholder,
+        run_success_placeholder,
+        download_fail_placeholder,
+        run_fail_placeholder,
+    ) = create_opt_info_area(opt_infos_container)
+
+    args_for_opt = [
+        tickers,
+        start_date,
+        end_date,
+        data_interval,
+        initial_capital,
+        commission_percent,
+        objective_function_selection,
+        optimization_method_selection,
+        max_tries_sambo,
+        run_mc,
+        promoted_combinations,
+        mc_sampling_method,
+        num_sims,
+        sims_length,
+        strat_class,
+        optimization_params_ranges,
+        opt_results_container,
+        run_wfo,
+        wfo_n_cycles,
+        wfo_oos_ratio,
+        download_progress_placeholder,
+        download_success_placeholder,
+        run_progress_placeholder,
+        run_success_placeholder,
+        download_fail_placeholder,
+        run_fail_placeholder,
+    ]
+
+    render_opt_button_and_pars_combs(optimization_params_ranges, args_for_opt)
 
 
 def render_opt_button_and_pars_combs(
@@ -452,7 +494,6 @@ def render_opt_button_and_pars_combs(
     # return exec_button
 
 
-@st.fragment
 def render_backtest_settings(
     all_strategies: dict[str : type[CommonStrategy]],
     backtest_settings: streamlit_obj,
@@ -522,7 +563,6 @@ def render_backtest_settings(
     return selected_strategy_name, run_mc, mc_sampling_method, sims_length, num_sims
 
 
-@st.fragment
 def render_opt_settings() -> tuple[str, str, str, int]:
     """Render the UI controls for selecting strategy, objective, and optimization method.
 
@@ -578,7 +618,6 @@ def render_opt_settings() -> tuple[str, str, str, int]:
     )
 
 
-@st.fragment
 def render_opt_mc_settings() -> tuple[bool, int, str, int, int]:
     """Render the UI controls for Monte Carlo simulation settings in optimization mode.
 
@@ -650,7 +689,6 @@ def render_opt_mc_settings() -> tuple[bool, int, str, int, int]:
     return run_mc, promoted_combinations, mc_sampling_method, num_sims, sims_length
 
 
-@st.fragment
 def render_opt_wfo_settings() -> tuple[bool, int, float]:
     """Render the UI controls for Walk Forward Optimization (WFO) settings.
 
@@ -719,7 +757,6 @@ def create_opt_info_area(opt_infos_container: st.delta_generator.DeltaGenerator)
     )
 
 
-@st.fragment
 def render_optimization_params(
     strategy_class: type[CommonStrategy],
 ) -> dict[str : int | float | str | bool]:

@@ -629,6 +629,22 @@ def start_optimization_process(
     else:
         all_ticker_results = {}
 
+    # results_container = st.empty()
+    # download_progress_placeholder = st.empty()
+    # download_success_placeholder = st.empty()
+    # run_progress_placeholder = st.empty()
+    # run_success_placeholder = st.empty()
+    # download_fail_placeholder = st.empty()
+    # run_fail_placeholder = st.empty()
+
+    download_progress_placeholder.container()
+    download_success_placeholder.empty()
+    download_success_placeholder.container()
+    run_progress_placeholder.container()
+    run_success_placeholder.container()
+    download_fail_placeholder.container()
+    run_fail_placeholder.container()
+
     with results_container:
         st.session_state.successful_downloads_tickers = []
         st.session_state.failed_downloads_tickers = []
@@ -737,12 +753,12 @@ def manage_opt_run_infos(
     run_success_placeholder: streamlit_obj,
     run_fail_placeholder: streamlit_obj,
     ticker: str,
-    optimization_results,
-    heatmap_plot,
-    sambo_plots,
+    optimization_results: object,
+    heatmap_plot: object,
+    sambo_plots: object,
     run_status: str,
-    combs_with_mc_stats,
-):
+    combs_with_mc_stats: object,
+) -> None:
     """Manage and update the UI and results dictionary after each optimization run.
 
     Updates the success or failure placeholders and stores results for each ticker.
@@ -1036,13 +1052,12 @@ class WalkForwardOptimizer:
         return drawdown.min()
 
     def run_wfo_optimization(self) -> pd.DataFrame:
-        """
-        Esegue la Walk Forward Optimization completa.
+        """Esegue la Walk Forward Optimization completa.
 
         Returns:
             DataFrame con i risultati di ogni ciclo
-        """
 
+        """
         windows = self._calculate_windows()
         col_wfo_cycle, col_task = st.columns(2)
         with col_wfo_cycle:
