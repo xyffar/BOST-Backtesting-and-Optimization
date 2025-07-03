@@ -3,7 +3,7 @@
 import streamlit as st
 
 # Import DISPLAY_TEXTS and CUSTOM_CSS
-from config import MESSAGES
+from config import MESSAGES, initialize_session_states, ss
 from ui import (
     make_body_backtesting_mode,
     make_body_optimization_mode,
@@ -12,7 +12,8 @@ from ui import (
 )
 from utils import load_strategies
 
-st.session_state.all_strategies = load_strategies()
+initialize_session_states()
+ss.all_strategies = load_strategies()
 
 # --- Streamlit Page Configuration ---
 st.set_page_config(
@@ -32,24 +33,17 @@ st.header(MESSAGES.get("display_texts").get("app_title"))
 show_subheader_according_to_mode()
 
 # Make the sidebar
-(
-    tickers,
-    start_date_yf,
-    end_date_yf,
-    data_interval,
-    initial_capital,
-    commission_percent,
-) = make_sidebar()
+make_sidebar()
 
 # --- Conditional UI for Mode (Main Content Area) ---
 if st.session_state.mode == "backtest":
     make_body_backtesting_mode(
-        tickers=tickers,
-        start_date_yf=start_date_yf,
-        end_date_yf=end_date_yf,
-        data_interval=data_interval,
-        initial_capital=initial_capital,
-        commission_percent=commission_percent,
+        # tickers=tickers,
+        # start_date_yf=start_date_yf,
+        # end_date_yf=end_date_yf,
+        # data_interval=data_interval,
+        # initial_capital=initial_capital,
+        # commission_percent=commission_percent,
     )
 
 elif st.session_state.mode == "optimization":

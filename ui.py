@@ -3,7 +3,7 @@
 import numpy as np
 import streamlit as st
 
-from backtest_runner import start_backtest_process
+from backtest_runner import _manage_excel_file_backtest, start_backtest_process
 from config import (
     # COMMISSION_PERCENT,
     # DATA_INTERVALS,
@@ -13,9 +13,11 @@ from config import (
     # DISPLAY_TEXTS,
     # INITIAL_CAPITAL,
     MIN_DATE,
+    ss,
     streamlit_obj,
     # OPTIMIZATION_OBJECTIVES,
 )
+from display_results import display_results
 from optimizer_runner import start_optimization_process
 from strategies.common_strategy import CommonStrategy
 from utils import (
@@ -59,11 +61,12 @@ def make_sidebar() -> tuple[list[str], str, str, str, float, float]:
     # --- Global Inputs (defined before conditional UI for modes) ---
     # Asset and Account Details (moved here)
     tickers_input = (
-        st.sidebar.text_area(MESSAGES["display_texts"]["ticker_input_label"], value="AAPL,MSFT", key="tickers")
+        st.sidebar.text_area(MESSAGES["display_texts"]["ticker_input_label"], value="AAPL,MSFT", key="tickers_wid")
         .replace(" ", "")
         .upper()
     )
-    tickers = [t.strip() for t in tickers_input.split(",") if t.strip()]
+
+    st.session_state.tickers = [t.strip() for t in tickers_input.split(",") if t.strip()]
 
     col_capital, col_commission = st.sidebar.columns(2)
     with col_capital:
@@ -72,7 +75,7 @@ def make_sidebar() -> tuple[list[str], str, str, str, float, float]:
             min_value=100.0,
             value=MESSAGES["general_settings"]["initial_capital"],
             step=100.0,
-            key="initial_capital_main",
+            key="initial_capital_wid",
         )
     with col_commission:
         commission_percent = (
@@ -83,7 +86,7 @@ def make_sidebar() -> tuple[list[str], str, str, str, float, float]:
                 value=MESSAGES["general_settings"]["commission_percent"] * 100,
                 step=0.01,
                 format="%.2f",
-                key="commission_percent_main",
+                key="commission_percent_wid",
             )
             / 100.0
         )
@@ -99,21 +102,21 @@ def make_sidebar() -> tuple[list[str], str, str, str, float, float]:
             value=parse_date(DEFAULT_START_DATE),
             min_value=parse_date(MIN_DATE),
             format="DD/MM/YYYY",
-            key="start_date",
+            key="start_date_wid",
         )
     with col_end_date:
         end_date_obj = st.date_input(
             MESSAGES["display_texts"]["end_date_label"],
             value=parse_date(DEFAULT_END_DATE),
             format="DD/MM/YYYY",
-            key="end_date",
+            key="end_date_wid",
         )
 
     data_interval = st.sidebar.selectbox(
         MESSAGES["display_texts"]["data_granularity_label"],
         MESSAGES["general_settings"]["data_intervals"],
         index=MESSAGES["general_settings"]["data_intervals"].index("1d"),
-        key="data_interval",
+        key="data_interval_wid",
     )
 
     st.sidebar.markdown("---")
@@ -133,6 +136,7 @@ def make_sidebar() -> tuple[list[str], str, str, str, float, float]:
                 MESSAGES["display_texts"]["button_backtest"],
                 use_container_width=True,
                 on_click=set_backtest_mode,
+                key="backtest_button_wid",
             )
     with col_mode2:
         if st.session_state.mode == "optimization":
@@ -145,24 +149,22 @@ def make_sidebar() -> tuple[list[str], str, str, str, float, float]:
                 MESSAGES["display_texts"]["button_optimization"],
                 use_container_width=True,
                 on_click=set_optimization_mode,
+                key="opt_button_wid",
             )
 
     st.sidebar.markdown("---")
 
-    return (
-        tickers,
-        start_date_obj.strftime("%Y-%m-%d"),
-        end_date_obj.strftime("%Y-%m-%d"),
-        data_interval,
-        initial_capital,
-        commission_percent,
-    )
+    # return (
+    #     tickers,
+    #     start_date_obj.strftime("%Y-%m-%d"),
+    #     end_date_obj.strftime("%Y-%m-%d"),
+    #     data_interval,
+    #     initial_capital,
+    #     commission_percent,
+    # )
 
 
-def render_strategy_params(
-    strategy_name: str,
-    backtest_params_container: streamlit_obj,
-) -> dict[str : int | float | str | bool]:
+def render_strategy_params() -> None:
     """Dynamically renders widgets for the selected strategy's parameters.
 
     Renders widgets for all parameters (including SL/TP) using number_input and a column layout.
@@ -175,102 +177,91 @@ def render_strategy_params(
         dict: A dictionary of the selected strategy's specific parameters (including SL/TP).
 
     """
-    strat_class: type[CommonStrategy] = st.session_state.all_strategies[strategy_name]
     params = {}
 
-    if issubclass(strat_class, CommonStrategy):
-        param_defs: list[dict] = strat_class.PARAMS_INFO
-
-        # Handle column layout for strategy parameters
-        cols_per_row: int = 5  # Number of columns per row, modified to accommodate all parameters
-        current_columns = []
-
-        for i, param_def in enumerate(param_defs):
-            if i % cols_per_row == 0:
-                current_columns = st.columns(cols_per_row)
-
-            with current_columns[i % cols_per_row]:
-                param_name = param_def["name"]
-                param_type = param_def["type"]
-                default_value = param_def["default"]
-
-                # More readable label for SL/TP
-                display_name = param_name.replace("_", " ").title()
-                if param_name in ["sl_percent", "tp_percent"]:
-                    display_name = display_name.replace("Percent", "(%)")
-
-                if "options" in param_def:  # For dropdown (e.g., moving average type)
-                    selected_option = st.selectbox(
-                        f"{display_name}",
-                        param_def["options"],
-                        index=param_def["options"].index(default_value),
-                        key=f"param_{param_name}",
-                    )
-                    params[param_name] = selected_option
-                elif param_type is int:
-                    params[param_name] = st.number_input(
-                        f"{display_name}",
-                        min_value=param_def["lowest"],
-                        max_value=param_def["highest"],
-                        value=default_value,
-                        step=param_def["step"],
-                        key=f"param_{param_name}",
-                    )
-                elif param_type is float:
-                    # Special format for SL/TP to show percentage
-                    value_to_display = (
-                        default_value * 100 if param_name in ["sl_percent", "tp_percent"] else default_value
-                    )
-                    min_val_display = (
-                        param_def["lowest"] * 100 if param_name in ["sl_percent", "tp_percent"] else param_def["lowest"]
-                    )
-                    max_val_display = (
-                        param_def["highest"] * 100
-                        if param_name in ["sl_percent", "tp_percent"]
-                        else param_def["highest"]
-                    )
-                    step_val_display = (
-                        param_def["step"] * 100 if param_name in ["sl_percent", "tp_percent"] else param_def["step"]
-                    )
-
-                    params[param_name] = st.number_input(
-                        f"{display_name}",
-                        min_value=float(min_val_display),
-                        max_value=float(max_val_display),
-                        value=float(value_to_display),
-                        step=float(step_val_display),
-                        format="%.2f",  # Format for float, two decimals
-                        key=f"param_{param_name}",
-                    )
-                    # Convert back to decimal if it was percentage
-                    if param_name in ["sl_percent", "tp_percent"]:
-                        params[param_name] /= 100.0
-                else:
-                    params[param_name] = st.text_input(
-                        f"{display_name}",
-                        value=str(default_value),
-                        key=f"param_{param_name}_text",
-                    )
-                    try:
-                        params[param_name] = param_type(params[param_name])
-                    except ValueError:
-                        st.warning(MESSAGES["display_texts"]["param_invalid_value"].format(param_name=param_name))
-                        params[param_name] = default_value
-
-    else:
+    if not issubclass(ss.all_strategies[ss.bt_strategy_wid], CommonStrategy):
         st.info(MESSAGES["display_texts"]["select_strategy_to_display_params"])
+        ss.bt_params = params
+        return
 
-    return params
+    param_defs: list[dict] = ss.all_strategies[ss.bt_strategy_wid].PARAMS_INFO
+
+    # Handle column layout for strategy parameters
+    cols_per_row: int = 5  # Number of columns per row, modified to accommodate all parameters
+    current_columns = []
+
+    for i, param_def in enumerate(param_defs):
+        if i % cols_per_row == 0:
+            current_columns = st.columns(cols_per_row)
+
+        with current_columns[i % cols_per_row]:
+            param_name = param_def["name"]
+            param_type = param_def["type"]
+            default_value = param_def["default"]
+
+            # More readable label for SL/TP
+            display_name = param_name.replace("_", " ").title()
+            if param_name in ["sl_percent", "tp_percent"]:
+                display_name = display_name.replace("Percent", "(%)")
+
+            if "options" in param_def:  # For dropdown (e.g., moving average type)
+                selected_option = st.selectbox(
+                    f"{display_name}",
+                    param_def["options"],
+                    index=param_def["options"].index(default_value),
+                    key=f"param_{param_name}",
+                )
+                params[param_name] = selected_option
+            elif param_type is int:
+                params[param_name] = st.number_input(
+                    f"{display_name}",
+                    min_value=param_def["lowest"],
+                    max_value=param_def["highest"],
+                    value=default_value,
+                    step=param_def["step"],
+                    key=f"param_{param_name}",
+                )
+            elif param_type is float:
+                # Special format for SL/TP to show percentage
+                value_to_display = default_value * 100 if param_name in ["sl_percent", "tp_percent"] else default_value
+                min_val_display = (
+                    param_def["lowest"] * 100 if param_name in ["sl_percent", "tp_percent"] else param_def["lowest"]
+                )
+                max_val_display = (
+                    param_def["highest"] * 100 if param_name in ["sl_percent", "tp_percent"] else param_def["highest"]
+                )
+                step_val_display = (
+                    param_def["step"] * 100 if param_name in ["sl_percent", "tp_percent"] else param_def["step"]
+                )
+
+                params[param_name] = st.number_input(
+                    f"{display_name}",
+                    min_value=float(min_val_display),
+                    max_value=float(max_val_display),
+                    value=float(value_to_display),
+                    step=float(step_val_display),
+                    format="%.2f",  # Format for float, two decimals
+                    key=f"param_{param_name}",
+                )
+                # Convert back to decimal if it was percentage
+                if param_name in ["sl_percent", "tp_percent"]:
+                    params[param_name] /= 100.0
+            else:
+                params[param_name] = st.text_input(
+                    f"{display_name}",
+                    value=str(default_value),
+                    key=f"param_{param_name}_text",
+                )
+                try:
+                    params[param_name] = param_type(params[param_name])
+                except ValueError:
+                    st.warning(MESSAGES["display_texts"]["param_invalid_value"].format(param_name=param_name))
+                    params[param_name] = default_value
+
+    ss.bt_params = params
 
 
-def make_body_backtesting_mode(
-    tickers: list[str],
-    start_date_yf: str,
-    end_date_yf: str,
-    data_interval: str,
-    initial_capital: float,
-    commission_percent: float,
-) -> None:
+def make_body_backtesting_mode() -> None:
     """Run the backtesting workflow for the selected tickers and strategy.
 
     Manage user input, run the backtest for each ticker, display results, and handle Monte Carlo simulation and export.
@@ -288,64 +279,43 @@ def make_body_backtesting_mode(
 
     """
     backtest_settings_container = st.container()
-    # backtest_params_container = st.container()
+    backtest_params_container = st.container()
+    backtest_infos_container = st.container()
     backtest_results_container = st.container()
 
-    with backtest_settings_container:
-        st.subheader(MESSAGES["display_texts"]["strategy_params_subheader"])  # Specific heading for strategy parameters
-        _render_all_backtesting_settings(
-            tickers,
-            start_date_yf,
-            end_date_yf,
-            data_interval,
-            initial_capital,
-            commission_percent,
-            backtest_settings_container,
-            backtest_results_container,
-        )
+    _render_all_backtesting_settings(
+        backtest_settings_container,
+        backtest_params_container,
+        backtest_infos_container,
+        backtest_results_container,
+    )
 
 
-@st.fragment
 def _render_all_backtesting_settings(
-    tickers: list[str],
-    start_date_yf: str,
-    end_date_yf: str,
-    data_interval: str,
-    initial_capital: float,
-    commission_percent: float,
     backtest_settings_container: streamlit_obj,
+    backtest_params_container: streamlit_obj,
+    backtest_infos_container: streamlit_obj,
     backtest_results_container: streamlit_obj,
 ) -> None:
-    (selected_strategy_name, run_mc, mc_sampling_method, sims_length, num_sims) = render_backtest_settings(
-        st.session_state.all_strategies, backtest_settings_container
-    )
+    with backtest_settings_container:
+        render_backtest_settings()
 
-    strategy_params: dict[str : int | float | str | bool] = render_strategy_params(
-        selected_strategy_name, backtest_settings_container
-    )
+    with backtest_params_container:
+        st.subheader(MESSAGES["display_texts"]["strategy_params_subheader"])  # Specific heading for strategy parameters
+        render_strategy_params()
 
-    args_for_backtest = [
-        tickers,
-        start_date_yf,
-        end_date_yf,
-        data_interval,
-        initial_capital,
-        commission_percent,
-        run_mc,
-        mc_sampling_method,
-        sims_length,
-        num_sims,
-        selected_strategy_name,
-        strategy_params,
-        backtest_results_container,
-    ]
+        st.button(
+            MESSAGES["display_texts"]["run_backtest_button"],
+            key="run_backtest_button_wid",
+            on_click=start_backtest_process,
+            args=[backtest_infos_container, backtest_results_container],
+        )
 
-    st.button(
-        MESSAGES["display_texts"]["run_backtest_button"],
-        key="run_backtest_button",
-        on_click=start_backtest_process,
-        args=args_for_backtest,
-    )
+    with backtest_results_container:
+        display_results()
+
+        # if all_ticker_results:
+        #     _manage_excel_file_backtest(excel_export_data)
 
 
 def make_body_optimization_mode(
@@ -479,7 +449,7 @@ def render_opt_button_and_pars_combs(
             icon="▶️",
             type="primary",
             use_container_width=True,
-            key="run_optimization_button",
+            key="run_optimization_button_wid",
             on_click=start_optimization_process,
             args=args_for_opt,
         )
@@ -494,10 +464,7 @@ def render_opt_button_and_pars_combs(
     # return exec_button
 
 
-def render_backtest_settings(
-    all_strategies: dict[str : type[CommonStrategy]],
-    backtest_settings: streamlit_obj,
-) -> list[str, bool, str, int, int]:
+def render_backtest_settings() -> None:
     """Render the UI controls for selecting strategy and Monte Carlo settings in backtest mode.
 
     Allows the user to select a strategy, enable Monte Carlo simulation, and configure related parameters.
@@ -525,12 +492,12 @@ def render_backtest_settings(
         # Strategy Selection in Backtest mode
         selected_strategy_name: str = st.selectbox(
             MESSAGES["display_texts"]["strategy_selection_label"],  # Label above
-            list(all_strategies.keys()),
-            key="selected_strategy",
+            list(ss.all_strategies.keys()),
+            key="bt_strategy_wid",
         )
 
     with col_run_mc:
-        run_mc: bool = st.checkbox("Run MonteCarlo (MC)?")
+        run_mc: bool = st.checkbox("Run MonteCarlo (MC)?", key="run_mc_wid")
 
     if run_mc:
         with col_mc_sampling_method:
@@ -538,6 +505,7 @@ def render_backtest_settings(
                 "Sampling Method",
                 options=["resampling_con_reimmissione", "permutazione"],
                 help="Resampling con reimmissione (Bootstrap) è tipicamente preferibile per scenari futuri.",
+                key="mc_sampling_method_wid",
             )
 
         with col_num_sims:
@@ -546,6 +514,7 @@ def render_backtest_settings(
                 value=100,  # Di default il doppio dei trade storici
                 min_value=2,  # Idea: zero significa usa il numero di trade della serie originale
                 max_value=100000,  # Un limite per evitare simulazioni troppo lunghe
+                key="mc_n_sims_wid",
             )
 
         if mc_sampling_method == "permutazione":
@@ -558,9 +527,8 @@ def render_backtest_settings(
                     min_value=0,
                     max_value=1000,  # Un limite per evitare simulazioni troppo lunghe
                     help="Se 0, il numero di trade è uguale a quello della serie originale",
+                    key="mc_sim_length_wid",
                 )
-
-    return selected_strategy_name, run_mc, mc_sampling_method, sims_length, num_sims
 
 
 def render_opt_settings() -> tuple[str, str, str, int]:
@@ -582,19 +550,19 @@ def render_opt_settings() -> tuple[str, str, str, int]:
         selected_strategy_name: str = st.selectbox(
             MESSAGES["display_texts"]["strategy_selection_label"],  # Label above
             list(all_strategies.keys()),
-            key="selected_strategy",
+            key="opt_strategy_wid",
         )
     with col_obj:
         objective_function_selection = st.selectbox(
             MESSAGES["display_texts"]["optimization_objective_label"],  # Label above
             list(MESSAGES["optimization_settings"]["objectives"].keys()),
-            key="objective_function",
+            key="opt_obj_func_wid",
         )
     with col_method:
         optimization_method_selection = st.selectbox(
             MESSAGES["display_texts"]["optimization_method_label"],  # Label above
             ["Grid Search", "SAMBO"],
-            key="optimization_method",
+            key="opt_method_wid",
         )
 
     if optimization_method_selection == "SAMBO":
@@ -605,7 +573,7 @@ def render_opt_settings() -> tuple[str, str, str, int]:
                 max_value=5000,
                 value=150,
                 step=10,
-                key="max_tries_SAMBO",
+                key="max_tries_SAMBO_wid",
             )
     else:
         max_tries_sambo = None
@@ -644,12 +612,12 @@ def render_opt_mc_settings() -> tuple[bool, int, str, int, int]:
     )
 
     with col_enable_mc:
-        run_mc: bool = st.checkbox("Run Monte Carlo?")
+        run_mc: bool = st.checkbox("Run Monte Carlo?", key="opt_run_mc_wid")
 
     if run_mc:
         with col_promoted_combinations:
             promoted_combinations: int = st.number_input(
-                "# Promoted combinations", value=10, min_value=1, max_value=100
+                "# Promoted combinations", value=10, min_value=1, max_value=100, key="mc_promoted_combs_wid"
             )
 
         with col_mc_sampling_method:
@@ -657,6 +625,7 @@ def render_opt_mc_settings() -> tuple[bool, int, str, int, int]:
                 "Sampling Method",
                 options=["resampling_con_reimmissione", "permutazione"],
                 help="Resampling con reimmissione (Bootstrap) è tipicamente preferibile per scenari futuri.",
+                key="opt_mc_sampling_method_wid",
             )
 
         with col_num_sims:
@@ -665,6 +634,7 @@ def render_opt_mc_settings() -> tuple[bool, int, str, int, int]:
                 value=100,  # Di default il doppio dei trade storici
                 min_value=2,  # Idea: zero significa usa il numero di trade della serie originale
                 max_value=100000,  # Un limite per evitare simulazioni troppo lunghe
+                key="opt_mc_n_sims_wid",
             )
 
         if mc_sampling_method == "permutazione":
@@ -677,6 +647,7 @@ def render_opt_mc_settings() -> tuple[bool, int, str, int, int]:
                     min_value=0,
                     max_value=1000,  # Un limite per evitare simulazioni troppo lunghe
                     help="Se 0, il numero di trade è uguale a quello della serie originale",
+                    key="opt_mc_sim_length_wid",
                 )
     else:
         promoted_combinations, mc_sampling_method, num_sims, sims_length = (
@@ -701,11 +672,13 @@ def render_opt_wfo_settings() -> tuple[bool, int, float]:
     (col_enable_wfo, col_wfo_n_cycles, col_wfo_oos_ratio, _, _) = st.columns(5, vertical_alignment="bottom")
 
     with col_enable_wfo:
-        run_wfo: bool = st.checkbox("Run WFO?")
+        run_wfo: bool = st.checkbox("Run WFO?", key="opt_run_wfo_wid")
 
     if run_wfo:
         with col_wfo_n_cycles:
-            wfo_n_cycles: int = st.number_input("Cycles", value=10, min_value=1, max_value=50)
+            wfo_n_cycles: int = st.number_input(
+                "Cycles", value=10, min_value=1, max_value=50, key="opt_wfo_n_cycles_wid"
+            )
 
         with col_wfo_oos_ratio:
             wfo_oos_ratio: str = st.number_input(
@@ -714,6 +687,7 @@ def render_opt_wfo_settings() -> tuple[bool, int, float]:
                 min_value=0.01,
                 max_value=0.75,
                 help="Percentuale della porzione Out Of Sample rispetto alla lunghezza totale del ciclo.",
+                key="opt_wfo_oos_ratio_wid",
             )
 
     else:

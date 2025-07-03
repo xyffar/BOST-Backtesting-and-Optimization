@@ -2,6 +2,7 @@
 
 import os
 import time
+from copy import deepcopy
 from datetime import datetime
 
 import numpy as np  # Importa numpy per np.nan
@@ -9,9 +10,9 @@ import pandas as pd
 import streamlit as st
 from backtesting import Backtest
 
-from config import MESSAGES, streamlit_obj
+from config import MESSAGES, session_state_names, ss, streamlit_obj
 from data_handler import download_data, get_sp500_data
-from display_results import display_results
+from display_results import display_results, show_montecarlo_equity_lines, show_montecarlo_histogram
 from excel_exporter import export_to_excel, log_execution_data
 from monte_carlo import run_montecarlo
 from strategies.buy_and_hold_strategy import BuyAndHoldStrategy
@@ -40,27 +41,18 @@ def compare_with_benchmark(strategy_stats: pd.Series, benchmark_stats: pd.Series
     metrics_to_display = [
         "Exposure Time [%]",
         "Equity Final [$]",  # Aggiunto simbolo valuta per chiarezza
-        "Equity Peak [$]",  # Aggiunto simbolo valuta per chiarezza
         "Return [%]",
-        "Buy & Hold Return [%]",
         "Return (Ann.) [%]",
         "Volatility (Ann.) [%]",
         "Sharpe Ratio",
         "Sortino Ratio",
         "Calmar Ratio",
         "Max. Drawdown [%]",
-        "Avg. Drawdown [%]",
         "Max. Drawdown Duration",
         "Avg. Drawdown Duration",
         "# Trades",
         "Win Rate [%]",
-        "Best Trade [%]",
-        "Worst Trade [%]",
-        "Avg. Trade [%]",
-        "Max. Trade Duration",
         "Avg. Trade Duration",
-        "Profit Factor",
-        "Expectancy [%]",
         "SQN",
     ]
 
@@ -94,11 +86,16 @@ def compare_with_benchmark(strategy_stats: pd.Series, benchmark_stats: pd.Series
         }
     )
     comparison_df.set_index("Metrica", inplace=True)
+    if comparison_df is not None:
+        styled_comparison_df = comparison_df.copy()
+    for col in styled_comparison_df.select_dtypes(include=np.number).columns:
+        styled_comparison_df[col] = styled_comparison_df[col].round(2)
 
-    return comparison_df
+    return styled_comparison_df
 
 
 def run_backtest(
+    ticker: str,
     data: pd.DataFrame,
     strategy_name: str,
     params: dict,
@@ -134,13 +131,9 @@ def run_backtest(
 
     """
     if data is None or data.empty:
-        return (
-            None,
-            None,
-            None,
-            "failure",
-            "Impossibile eseguire il backtest: dati non disponibili.",
-        )
+        st.error("Impossibile eseguire il backtest: dati non disponibili.")
+        return
+
     strat_class: type[CommonStrategy] = st.session_state.all_strategies[strategy_name]
     bt = Backtest(
         data,
@@ -152,46 +145,33 @@ def run_backtest(
 
     try:
         start_time = time.perf_counter()
-        stats = bt.run(**params)
+        ss.bt_stats[ticker] = bt.run(**params)
         end_time = time.perf_counter()
         pars_time_log = {"periods": len(data), "strategy": strat_class.DISPLAY_NAME}
         log_execution_data(start_time, end_time, action="Backtest", **pars_time_log)
 
         if is_plot_wanted:
             start_time = time.perf_counter()
-            plot_html = bt.plot(filename="TO BE DELETED.html", resample=False, open_browser=False)
+            ss.backtest_interactive_plot[ticker] = bt.plot(
+                filename="TO BE DELETED.html", resample=False, open_browser=False
+            )
             if os.path.exists("TO BE DELETED.html"):
                 os.remove("TO BE DELETED.html")
             end_time = time.perf_counter()
             log_execution_data(start_time, end_time, action="Backtest_plot", **pars_time_log)
-        else:
-            plot_html = None
-        trades_df = stats._trades
 
-        return (
-            stats,
-            plot_html,
-            trades_df,
-            "success",
-            "Backtest completato con successo.",
-        )
+        ss.backtest_trade_list[ticker] = ss.bt_stats[ticker]._trades
+
+        return
+
     except Exception as e:
-        return (
-            None,
-            None,
-            None,
-            "failure",
-            f"Errore durante l'esecuzione del backtest: {e}. "
-            "Controlla i parametri della strategia o la logica interna.",
+        st.error(
+            f"Errore durante l'esecuzione del backtest: {e}. Controlla i parametri della strategia o la logica interna."
         )
+        return
 
 
 def get_benchmark_data(
-    start_date_yf: str,
-    end_date_yf: str,
-    data_interval: str,
-    initial_capital: float,
-    commission_percent: float,
     download_progress_placeholder: streamlit_obj,
     download_success_placeholder: streamlit_obj,
     successful_downloads_tickers: list,
@@ -236,7 +216,7 @@ def get_benchmark_data(
             SP500_TICKER=MESSAGES["general_settings"]["sp500_ticker"]
         )
     )
-    benchmark_raw_data, status, msg = get_sp500_data(start_date_yf, end_date_yf, data_interval)
+    benchmark_raw_data, status, msg = get_sp500_data(ss.start_date_wid, ss.end_date_wid, ss.data_interval_wid)
     download_progress_placeholder.empty()  # Remove blue progress box
 
     if status == "success":
@@ -253,8 +233,8 @@ def get_benchmark_data(
                 bt_benchmark = Backtest(
                     benchmark_raw_data,
                     BuyAndHoldStrategy,  # Use the BuyAndHold strategy
-                    cash=initial_capital,
-                    commission=commission_percent,  # Apply commissions to benchmark too for parity
+                    cash=ss.initial_capital_wid,
+                    commission=ss.commission_percent_wid / 100,  # Apply commissions to benchmark too for parity
                     exclusive_orders=True,
                 )
                 benchmark_stats = bt_benchmark.run()
@@ -272,18 +252,7 @@ def get_benchmark_data(
 
 
 def start_backtest_process(
-    tickers: list[str],
-    start_date_yf: str,
-    end_date_yf: str,
-    data_interval: str,
-    initial_capital: float,
-    commission_percent: float,
-    run_mc: bool,
-    mc_sampling_method: str,
-    sims_length: int,
-    num_sims: int,
-    strat_name: str,
-    strategy_params: dict[str, int | float | str | bool],
+    backtest_infos_container: streamlit_obj,
     backtest_results_container: streamlit_obj,
 ) -> None:
     """Run the backtest process for the given tickers and strategy.
@@ -309,18 +278,25 @@ def start_backtest_process(
         None
 
     """
-    with backtest_results_container:
+    # for name in session_state_names:
+    #     if session_state_names[name][1]:
+    #         ss[name] = session_state_names[name][0]
+
+    # Reset the result relatedsession states
+    ss.update(
+        {name: deepcopy(session_state_names[name][0]) for name in session_state_names if session_state_names[name][1]}
+    )
+    backtest_infos_container.empty()
+    backtest_results_container.empty()
+
+    with backtest_infos_container:
         col_progress, col_success, col_failed = st.columns(3)
-        if not tickers:
+        if not ss.tickers:
             st.error(MESSAGES["display_texts"]["messages"]["enter_ticker_error"])
             return
-        elif strat_name is None:
+        elif ss.bt_strategy_wid is None:
             st.error(MESSAGES["display_texts"]["messages"]["select_valid_strategy_error"])
             return
-
-    all_ticker_results = {}
-    excel_export_data = {}
-    all_mc_statistics = {}
 
     # Placeholders for dynamic messages
     with col_progress:
@@ -333,42 +309,21 @@ def start_backtest_process(
         download_fail_placeholder = st.empty()
         run_fail_placeholder = st.empty()  # For backtest/optimization success/failure messages
 
-    successful_downloads_tickers = []
-    failed_downloads_tickers = []
-    successful_runs_tickers = []
-    failed_runs_tickers = []
-
     benchmark_stats = get_benchmark_data(
-        start_date_yf,
-        end_date_yf,
-        data_interval,
-        initial_capital,
-        commission_percent,
         download_progress_placeholder,
         download_success_placeholder,
-        successful_downloads_tickers,
-        failed_downloads_tickers,
+        ss.successful_downloads_tickers,
+        ss.failed_downloads_tickers,
     )
 
-    with backtest_results_container:
+    with backtest_infos_container:
         progress_bar = st.progress(0)
 
-        for i, ticker in enumerate(tickers):
+    with backtest_results_container:
+        for i, ticker in enumerate(ss.tickers):
             _process_single_ticker(
                 ticker,
                 i,
-                tickers,
-                start_date_yf,
-                end_date_yf,
-                data_interval,
-                strat_name,
-                strategy_params,
-                initial_capital,
-                commission_percent,
-                run_mc,
-                mc_sampling_method,
-                sims_length,
-                num_sims,
                 benchmark_stats,
                 download_progress_placeholder,
                 download_success_placeholder,
@@ -376,36 +331,18 @@ def start_backtest_process(
                 run_progress_placeholder,
                 run_success_placeholder,
                 run_fail_placeholder,
-                successful_downloads_tickers,
-                failed_downloads_tickers,
-                successful_runs_tickers,
-                failed_runs_tickers,
-                all_ticker_results,
-                excel_export_data,
-                all_mc_statistics,
+                ss.successful_downloads_tickers,
+                ss.failed_downloads_tickers,
+                ss.successful_runs_tickers,
+                ss.failed_runs_tickers,
                 progress_bar,
             )
-        display_results(ticker_results=all_ticker_results, all_mc_statistics=all_mc_statistics)
-
-        if all_ticker_results:
-            _manage_excel_file_backtest(excel_export_data)
+    ss.backtest_results_generated = True
 
 
 def _process_single_ticker(
     ticker: str,
     i: int,
-    tickers: list[str],
-    start_date_yf: str,
-    end_date_yf: str,
-    data_interval: str,
-    strat_name: str,
-    strategy_params: dict[str, int | float | str | bool],
-    initial_capital: float,
-    commission_percent: float,
-    run_mc: bool,
-    mc_sampling_method: str,
-    sims_length: int,
-    num_sims: int,
     benchmark_stats: pd.Series | None,
     download_progress_placeholder: streamlit_obj,
     download_success_placeholder: streamlit_obj,
@@ -417,18 +354,15 @@ def _process_single_ticker(
     failed_downloads_tickers: list,
     successful_runs_tickers: list,
     failed_runs_tickers: list,
-    all_ticker_results: dict,
-    excel_export_data: dict,
-    all_mc_statistics: dict,
     progress_bar: streamlit_obj,
 ) -> None:
     download_progress_placeholder.info(
         MESSAGES["display_texts"]["messages"]["downloading_ticker"].format(
-            ticker=ticker, current_idx=i + 1, total_tickers=len(tickers)
+            ticker=ticker, current_idx=i + 1, total_tickers=len(ss.tickers)
         )
     )
 
-    data, status, _ = download_data(ticker, start_date_yf, end_date_yf, data_interval)
+    data, status, _ = download_data(ticker, ss.start_date_wid, ss.end_date_wid, ss.data_interval_wid)
 
     download_progress_placeholder.empty()  # Remove blue progress box
 
@@ -441,45 +375,96 @@ def _process_single_ticker(
         download_fail_placeholder,
     )
 
-    stats, plot_html, trades_df, run_status, _ = (None, None, None, "failure", None)
     if data is not None:
         run_progress_placeholder.info(MESSAGES["display_texts"]["messages"]["execution_in_progress"] + ticker)
-        stats, plot_html, trades_df, run_status, _ = run_backtest(
-            data,
-            strat_name,
-            strategy_params,
-            initial_capital,
-            commission_percent,
-        )
+        try:
+            run_backtest(
+                ticker,
+                data,
+                ss.bt_strategy_wid,
+                ss.bt_params,
+                ss.initial_capital_wid,
+                ss.commission_percent_wid / 100,
+                True,
+            )
+            run_status = "success"
+        except Exception:
+            run_status = "fail"
         run_progress_placeholder.empty()
+    else:
+        run_status = "fail"
 
     _update_run_status(
         run_status,
         ticker,
-        stats,
-        plot_html,
-        trades_df,
-        benchmark_stats,
         successful_runs_tickers,
         failed_runs_tickers,
         run_success_placeholder,
         run_fail_placeholder,
-        all_ticker_results,
-        excel_export_data,
     )
 
-    progress_bar.progress((i + 1) / len(tickers))
+    if ticker not in ss.bt_stats.keys() or ss.bt_stats[ticker] is None:
+        return
 
-    if run_mc and data is not None and run_status == "success" and trades_df is not None and stats is not None:
-        all_mc_statistics[ticker] = run_montecarlo(
-            trades=list(trades_df["ReturnPct"]),
-            original_stats=stats,
-            initial_capital=initial_capital,
+    if benchmark_stats is not None:
+        ss.backtest_comp_with_benchmark_df[ticker] = compare_with_benchmark(ss.bt_stats[ticker], benchmark_stats)
+
+    progress_bar.progress((i + 1) / len(ss.tickers))
+
+    if (
+        ss.run_mc_wid
+        and data is not None
+        and run_status == "success"
+        and ss.backtest_trade_list[ticker] is not None
+        and ss.bt_stats[ticker] is not None
+    ):
+        run_montecarlo(
+            ticker=ticker,
+            trades=list(ss.backtest_trade_list[ticker]["ReturnPct"]),
+            original_stats=ss.bt_stats[ticker],
+            initial_capital=ss.initial_capital_wid,
             benchmark=benchmark_stats,
-            sampling_method=mc_sampling_method,
-            sim_length=sims_length,
-            num_sims=num_sims,
+            sampling_method=ss.mc_sampling_method_wid,
+            sim_length=ss.mc_sim_length_wid,
+            num_sims=ss.mc_n_sims_wid,
         )
+        if ss.backtest_mc_percentiles[ticker] is not None and ss.backtest_mc_probs_benchmark[ticker] is not None:
+            # Grafico 1: Equity Lines Simulate
+            show_montecarlo_equity_lines(
+                ticker,
+                ss.mc_pars,
+                ss.matrice_equity_lines_simulati,
+                ss.orig_current_equity_path,
+                max_n_shown_lines=1000,
+            )
+
+            # Grafico 2: Istogramma della Distribuzione dei Drawdown Massimi
+            show_montecarlo_histogram(
+                ticker=ticker,
+                metric=ss.mc_metrics_data["Max. Drawdown [%]"],
+                title="Distribution of Simulated Max Drawdowns",
+                x_label="Max. Drawdown [%]",
+                perc_label="VaR Drawdown [%]",
+                percentile=5,
+                nickname="backtest_mc_var_plot",
+            )
+
+            # Grafico 3: Istogramma della Distribuzione del Capitale Finale
+            show_montecarlo_histogram(
+                ticker=ticker,
+                metric=ss.mc_metrics_data["Return [%]"],
+                title="Distribution of Return [%]",
+                x_label="Return [%]",
+                perc_label="Return [%]",
+                percentile=5,
+                nickname="backtest_mc_returns_plot",
+            )
+
+        else:
+            st.warning(
+                "The Monte Carlo statistics aren't available as the simulation returned "
+                "None instead of dataframes. Check the outcome of the simulation"
+            )
 
 
 def _update_download_status(
@@ -505,43 +490,22 @@ def _update_download_status(
 def _update_run_status(
     run_status: str,
     ticker: str,
-    stats: pd.Series | None,
-    plot_html: str | None,
-    trades_df: pd.DataFrame | None,
-    benchmark_stats: pd.Series | None,
     successful_runs_tickers: list,
     failed_runs_tickers: list,
     run_success_placeholder: streamlit_obj,
     run_fail_placeholder: streamlit_obj,
-    all_ticker_results: dict,
-    excel_export_data: dict,
 ) -> None:
-    if run_status == "success":
-        successful_runs_tickers.append(ticker)
-        run_success_placeholder.success(
-            MESSAGES["display_texts"]["messages"]["execution_completed"] + ", ".join(successful_runs_tickers)
-        )
-
-        if stats is not None:
-            comparison_df = None
-            if benchmark_stats is not None:
-                comparison_df = compare_with_benchmark(stats, benchmark_stats)
-            all_ticker_results[ticker] = (
-                stats,
-                plot_html,
-                trades_df,
-                comparison_df,
-            )
-            excel_export_data[ticker] = (
-                stats,
-                trades_df,
-                comparison_df,
-            )
-    else:
+    if run_status != "success":
         failed_runs_tickers.append(ticker)
         run_fail_placeholder.error(
             MESSAGES["display_texts"]["messages"]["execution_failed"] + ", ".join(failed_runs_tickers)
         )
+        return
+
+    successful_runs_tickers.append(ticker)
+    run_success_placeholder.success(
+        MESSAGES["display_texts"]["messages"]["execution_completed"] + ", ".join(successful_runs_tickers)
+    )
 
 
 def _manage_excel_file_backtest(excel_export_data: dict) -> None:

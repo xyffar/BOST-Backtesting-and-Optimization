@@ -6,11 +6,12 @@ import pandas as pd
 # import quantstats as qs
 import streamlit as st
 
-from config import MESSAGES
+from config import MESSAGES, ss
 from excel_exporter import log_execution_data
 
 
 def run_montecarlo(
+    ticker: str,
     trades: list[float],
     original_stats: pd.Series,
     initial_capital: float,
@@ -105,7 +106,7 @@ def run_montecarlo(
 
     orig_current_equity_path = np.insert(initial_capital * (trade_returns_array + 1).cumprod(), 0, initial_capital)
 
-    metrics_data: dict[str : np.array] = {
+    ss.mc_metrics_data = {
         "Return [%]": np.array(all_total_returns) * 100,
         "Max. Drawdown [%]": np.array(all_max_drawdowns),
         "Sharpe Ratio": np.array(all_sharpe_ratios),
@@ -113,69 +114,20 @@ def run_montecarlo(
         "SQN": np.array(all_sqn_values),
     }
 
-    metrics_df = _build_metrics_percentiles_df(metrics_data, original_stats)
-    prob_df = _build_benchmark_prob_df(metrics_data, benchmark)
+    ss.backtest_mc_percentiles[ticker] = _build_metrics_percentiles_df(ss.mc_metrics_data, original_stats)
+    ss.backtest_mc_probs_benchmark[ticker] = _build_benchmark_prob_df(ss.mc_metrics_data, benchmark)
 
-    mc_pars: dict[str : int | str] = {
+    ss.mc_pars = {
         "# Simulations": num_sims,
         "Length Simulations": sim_length,
         "Sampling Method": sampling_method,
     }
 
     end_time = time.perf_counter()
-    log_execution_data(start_time, end_time, action="Monte Carlo", **mc_pars)
+    log_execution_data(start_time, end_time, action="Monte Carlo", **ss.mc_pars)
 
-    return (
-        metrics_df,
-        prob_df,
-        mc_pars,
-        matrice_equity_lines_simulati,
-        metrics_data,
-        orig_current_equity_path,
-    )
-
-
-# def _run_montecarlo_simulations(
-#     trade_returns_array: np.ndarray,
-#     initial_capital: float,
-#     sampling_method: str,
-#     sim_length: int,
-#     num_sims: int,
-# ) -> tuple[list, list, list, list, list, np.ndarray]:
-#     all_total_returns = []
-#     all_max_drawdowns = []
-#     all_sharpe_ratios = []
-#     all_sortino_ratios = []
-#     all_sqn_values = []
-#     matrice_equity_lines_simulati = np.zeros((num_sims, sim_length + 1))
-
-#     for i in range(num_sims):
-#         if sampling_method == "resampling_con_reimmissione":
-#             sampled_returns = np.random.choice(trade_returns_array, size=sim_length, replace=True)
-#         elif sampling_method == "permutazione":
-#             sampled_returns = np.random.permutation(trade_returns_array)[:sim_length]
-#         else:
-#             raise ValueError(
-#                 "Errore: Metodo di campionamento non valido. Usa 'resampling_con_reimmissione' o 'permutazione'."
-#             )
-
-#         current_equity_path = np.insert(initial_capital * (sampled_returns + 1).cumprod(), 0, initial_capital)
-#         matrice_equity_lines_simulati[i, :] = current_equity_path
-
-#         all_total_returns.append(calculate_total_returns(np.array(current_equity_path), initial_capital))
-#         all_max_drawdowns.append(calculate_max_drawdown(current_equity_path) * 100)
-#         all_sharpe_ratios.append(calculate_sharpe_ratio(sampled_returns))
-#         all_sortino_ratios.append(calculate_sortino_ratio(sampled_returns))
-#         all_sqn_values.append(calculate_sqn(sampled_returns))
-
-#     return (
-#         all_total_returns,
-#         all_max_drawdowns,
-#         all_sharpe_ratios,
-#         all_sortino_ratios,
-#         all_sqn_values,
-#         matrice_equity_lines_simulati,
-#     )
+    ss.matrice_equity_lines_simulati = matrice_equity_lines_simulati
+    ss.orig_current_equity_path = orig_current_equity_path
 
 
 def _run_montecarlo_simulations(
@@ -318,8 +270,6 @@ def run_montecarlos_for_best_combs(
             by=obj_column_name, ascending=not MESSAGES["optimization_settings"]["objectives"][obj_column_name]
         )  # Ordino secondo l'obiettivo
         best_combs = best_combs.head(promoted_combinations)  # Prendo solo le prime combinazioni
-        # best_combs = best_combs.drop(columns=best_combs.columns, axis=1)
-        # best_combs = best_combs.reset_index()
         combs_with_mc_stats = pd.DataFrame()
         mc_run_placeholder = st.empty()
         for n in range(
@@ -330,9 +280,6 @@ def run_montecarlos_for_best_combs(
             strategy_params = dict(
                 zip(best_combs.index.names, best_combs.index[n], strict=False)
             )  # Prendo una combinazione alla volta
-            # (stats, _, trades_df, _, # Faccio il backtest della combinazione di parametri
-            #                     _) = run_backtest(data, strat_class, strategy_params,
-            # initial_capital, commission_percent, is_plot_wanted=False)
             trades_df = all_comb_data["Trade_returns"].iloc[n]
             if trades_df is not None:  # Se non ci sono trades, il MC non si può fare
                 all_mc_statistics = run_montecarlo(

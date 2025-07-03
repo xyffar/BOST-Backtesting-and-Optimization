@@ -7,17 +7,11 @@ import streamlit as st
 import streamlit_bokeh
 from sambo.plot import plot_convergence, plot_evaluations, plot_objective
 
-from config import MESSAGES
+from config import MESSAGES, ss
 from utils import add_benchmark_comparison, list_varying_params
 
 
-def display_results(
-    ticker_results: dict,
-    all_mc_statistics: dict[str : tuple[pd.DataFrame, pd.DataFrame, dict[str : int | str]]] | None = None,
-    benchmark_comparison: float | int | None = None,
-    is_optimization_mode: bool = False,
-    obj_func: str | None = None,
-) -> None:
+def display_results() -> None:
     """Display backtest or optimization results in separate tabs for each ticker.
 
     This function serves as the main entry point for presenting all analysis results
@@ -47,28 +41,28 @@ def display_results(
         None: This function directly renders content to the Streamlit UI.
 
     """
-    if not ticker_results:
+    if not ss.backtest_results_generated and not ss.opt_results_generated:
         st.warning(MESSAGES["display_texts"]["messages"]["no_results_to_show"])
         return
 
-    tabs = st.tabs(list(ticker_results.keys()))
+    tickers_with_results = tuple((*ss.bt_stats.keys(), *ss.opt_combs_ranking.keys()))
 
-    for i, ticker in enumerate(ticker_results.keys()):
+    tabs = st.tabs(tickers_with_results)
+
+    for i, ticker in enumerate(tickers_with_results):
         with tabs[i]:
             st.markdown(f"""### {MESSAGES["display_texts"]["messages"]["results_for_ticker"].format(ticker=ticker)}""")
 
-            if is_optimization_mode:
+            if ss.mode == "optimization":
                 _display_optimization_results(
                     ticker_results[ticker],
                     benchmark_comparison,
                     obj_func,
                 )
+            elif ss.mode == "backtest":
+                _display_backtest_results(ticker)
             else:
-                _display_backtest_results(
-                    ticker_results[ticker],
-                    all_mc_statistics,
-                    ticker,
-                )
+                st.error("The mode is neither backtesting or optimization!")
 
 
 def _display_optimization_results(
@@ -186,38 +180,29 @@ def show_heatmaps(heatmap_plots: list) -> None:
             plt.close(fig)
 
 
-def _display_backtest_results(
-    ticker_result: tuple,
-    all_mc_statistics: dict | None,
-    ticker: str,
-) -> None:
-    (stats, plot_html, trades_df, benchmark_comparison_df) = ticker_result
-
-    if stats is not None:
+def _display_backtest_results(ticker: str) -> None:
+    if ss.backtest_comp_with_benchmark_df[ticker] is not None:
         st.markdown(f"#### {MESSAGES['display_texts']['messages']['backtest_stats_benchmark_comparison']}")
-        if benchmark_comparison_df is not None:
-            styled_comparison_df = benchmark_comparison_df.copy()
-            for col in styled_comparison_df.select_dtypes(include=np.number).columns:
-                styled_comparison_df[col] = styled_comparison_df[col].round(2)
-            st.dataframe(styled_comparison_df, use_container_width=True)
-        else:
-            st.warning(MESSAGES["display_texts"]["messages"]["benchmark_comparison_not_available"])
+        st.dataframe(ss.backtest_comp_with_benchmark_df[ticker], use_container_width=True)
+    else:
+        st.warning(MESSAGES["display_texts"]["messages"]["benchmark_comparison_not_available"])
 
-        st.markdown(f"#### {MESSAGES['display_texts']['messages']['interactive_backtest_chart']}")
-        streamlit_bokeh.streamlit_bokeh(plot_html, use_container_width=False, theme="light_minimal")
+    st.markdown(f"#### {MESSAGES['display_texts']['messages']['interactive_backtest_chart']}")
+    streamlit_bokeh.streamlit_bokeh(
+        ss.backtest_interactive_plot[ticker], use_container_width=False, theme="light_minimal"
+    )
 
-        st.markdown(f"#### {MESSAGES['display_texts']['messages']['list_of_trades']}")
+    st.markdown(f"#### {MESSAGES['display_texts']['messages']['list_of_trades']}")
+    if ss.backtest_trade_list[ticker] is not None and not ss.backtest_trade_list[ticker].empty:
+        st.dataframe(ss.backtest_trade_list[ticker], use_container_width=True)
+    else:
+        st.info(MESSAGES["display_texts"]["messages"]["no_trades_executed"])
 
-        if trades_df is not None and not trades_df.empty:
-            st.dataframe(trades_df, use_container_width=True)
-        else:
-            st.info(MESSAGES["display_texts"]["messages"]["no_trades_executed"])
-
-        if all_mc_statistics != {} and all_mc_statistics is not None:
-            show_montecarlo_results(all_mc_statistics, ticker)
+    if ticker in ss.backtest_mc_percentiles.keys() and ss.backtest_mc_percentiles[ticker] is not None:
+        show_montecarlo_results(ticker)
 
 
-def show_montecarlo_results(all_mc_statistics: dict, ticker: str) -> None:
+def show_montecarlo_results(ticker: str) -> None:
     """Display detailed Monte Carlo simulation results for a given ticker.
 
     This includes percentile dataframes, benchmark comparisons, and various
@@ -240,67 +225,32 @@ def show_montecarlo_results(all_mc_statistics: dict, ticker: str) -> None:
         None: This function directly renders content to the Streamlit UI.
 
     """
-    (
-        df_percentiles,
-        df_compare_benchmark,
-        mc_pars,
-        simulated_equity_lines,
-        metrics_data,
-        original_equity_path,
-    ) = all_mc_statistics[ticker]
-    if df_percentiles is not None and df_compare_benchmark is not None:
+    if ss.backtest_mc_percentiles[ticker] is not None and ss.backtest_mc_probs_benchmark[ticker] is not None:
         st.markdown("---")
-        st.subheader("Analisi Monte Carlo")
-        st.dataframe(df_percentiles.style.format({s: "{:.2f}" for s in df_percentiles.columns}))
-        st.dataframe(df_compare_benchmark)
-
-        # Grafico 1: Equity Lines Simulate
-        show_montecarlo_equity_lines(
-            mc_pars,
-            simulated_equity_lines,
-            original_equity_path,
-            max_n_shown_lines=1000,
+        st.subheader("Monte Carlo Analysis")
+        st.dataframe(
+            ss.backtest_mc_percentiles[ticker].style.format(
+                {s: "{:.2f}" for s in ss.backtest_mc_percentiles[ticker].columns}
+            )
         )
-
-        # Grafico 2: Istogramma della Distribuzione dei Drawdown Massimi
-        show_montecarlo_histogram(
-            metric=metrics_data["Max. Drawdown [%]"],
-            title="Distribution of Simulated Max Drawdowns",
-            x_label="Max. Drawdown [%]",
-            perc_label="VaR Drawdown [%]",
-            percentile=5,
-        )
-
-        # Grafico 3: Istogramma della Distribuzione del Capitale Finale
-        show_montecarlo_histogram(
-            metric=metrics_data["Return [%]"],
-            title="Distribution of Return [%]",
-            x_label="Return [%]",
-            perc_label="Return [%]",
-            percentile=5,
-        )
-
-        # fig3, ax3 = plt.subplots(figsize=(10, 6))
-        # return_data = metrics_data['Return [%]']
-        # ax3.hist(return_data, bins=50, edgecolor='black', alpha=0.7)
-        # ax3.set_title('Distribution of Return [%]')
-        # ax3.set_xlabel('Return [%]')
-        # ax3.set_ylabel('Frequency')
-        # ax3.axvline(np.mean(return_data), color='green', linestyle='dashed', linewidth=2,
-        #                             label=f'Mean: {np.mean(return_data):,.2f}%')
-        # ax3.legend()
-        # ax3.grid(True)
-        # plt.tight_layout()
-        # st.pyplot(fig3)
-    else:
-        st.warning(
-            "The Monte Carlo statistics aren't available as the simulation returned "
-            "None instead of dataframes. Check the outcome of the simulation"
-        )
+        st.dataframe(ss.backtest_mc_probs_benchmark[ticker])
+        cols = st.columns(3)
+        with cols[0]:
+            st.pyplot(ss.backtest_mc_equity_lines_plot[ticker])
+        with cols[1]:
+            st.pyplot(ss.backtest_mc_var_plot[ticker])
+        with cols[2]:
+            st.pyplot(ss.backtest_mc_returns_plot[ticker])
 
 
 def show_montecarlo_histogram(
-    metric: np.ndarray | pd.Series, title: str, x_label: str, perc_label: str, percentile: int | float
+    ticker: str,
+    metric: np.ndarray | pd.Series,
+    title: str,
+    x_label: str,
+    perc_label: str,
+    percentile: int | float,
+    nickname: str,
 ) -> None:
     """Generate and displays a histogram for a given metric from Monte Carlo simulations.
 
@@ -334,10 +284,12 @@ def show_montecarlo_histogram(
     ax2.legend()
     ax2.grid(True)
     plt.tight_layout()
-    st.pyplot(fig2)
+    ss[nickname][ticker] = fig2
+    # st.pyplot(fig2)
 
 
 def show_montecarlo_equity_lines(
+    ticker: str,
     mc_pars: dict,
     simulated_equity_lines: np.ndarray,
     original_equity_path: np.ndarray | pd.Series,
@@ -385,4 +337,5 @@ def show_montecarlo_equity_lines(
     ax1.grid(True)
     ax1.legend()  # Aggiungi la legenda per le linee specifiche
     plt.tight_layout()
-    st.pyplot(fig1)
+    ss.backtest_mc_equity_lines_plot[ticker] = fig1
+    # st.pyplot(fig1)
