@@ -409,12 +409,45 @@ def start_optimization_process(
     opt_infos_container: streamlit_obj,
     opt_results_container: streamlit_obj,
 ) -> None:
+    """Initiate and manage the full optimization process.
+
+    Orchestrate the entire optimization workflow. This function first checks if
+    the user intends to clear previous results. If so, it resets relevant
+    session state variables and clears UI containers. Otherwise, it performs
+    input validation, fetches benchmark data, and iterates through each
+    user-selected ticker. For each ticker, it downloads data, runs the
+    optimization with the specified strategy and parameters, and optionally
+    performs a Monte Carlo simulation on the best combinations.
+    It displays progress in the UI throughout the process.
+
+    All inputs for the optimization (tickers, strategy, parameters, etc.) are
+    retrieved from the Streamlit session state (`ss`).
+
+    Args:
+        opt_infos_container (streamlit_obj): The Streamlit container
+            designated for displaying informational messages, such as download
+            and run progress.
+        opt_results_container (streamlit_obj): The Streamlit container
+            where the final optimization results (stats, plots, etc.) will be
+            rendered.
+
+    Returns:
+        None: This function modifies the Streamlit UI and session state directly.
+
+    Side Effects:
+        - Resets session state variables related to optimization results if clearing.
+        - Populates `ss.opt_combs_ranking` with ranked optimization results.
+        - Populates `ss.opt_heatmaps` or `ss.opt_sambo_plots` with generated plots.
+        - Populates `ss.opt_mc_results` with Monte Carlo simulation results if enabled.
+        - Updates Streamlit UI placeholders with progress, success, and error messages.
+
+    """
     if ss.opt_results_generated:
-        _reset_info_res_containers(opt_infos_container, opt_results_container)
         reset_ss_values_for_results()
+        _reset_info_res_containers(opt_infos_container, opt_results_container)
         return
 
-    if check_incorrect_arguments():
+    if check_incorrect_arguments_opt():
         return
 
     reset_ss_values_for_results()
@@ -493,12 +526,38 @@ def start_optimization_process(
     ss.opt_results_generated = True
 
 
-def _reset_info_res_containers(opt_infos_container, opt_results_container):
+def _reset_info_res_containers(opt_infos_container: streamlit_obj, opt_results_container: streamlit_obj) -> None:
+    """Clear the contents of the information and results containers in the UI.
+
+    This function is used to remove any previously displayed messages, plots,
+    or tables before a new optimization run starts or when clearing old results.
+
+    Args:
+        opt_infos_container (streamlit_obj): The Streamlit container for
+            displaying informational messages (e.g., progress, success, errors).
+        opt_results_container (streamlit_obj): The Streamlit container for
+            displaying the main optimization results (e.g., tables, plots).
+
+    """
     opt_infos_container.empty()
     opt_results_container.empty()
 
 
-def create_info_placeholders(opt_infos_container):
+def create_info_placeholders(
+    opt_infos_container: streamlit_obj,
+) -> tuple[streamlit_obj, streamlit_obj, streamlit_obj, streamlit_obj, streamlit_obj, streamlit_obj]:
+    """Create placeholders within a Streamlit container for displaying information messages during the optimization process.
+
+    This function sets up a 3-column layout within the given container and creates empty placeholders for progress, success, and failure messages related to data downloads and optimization runs.
+
+    Args:
+        opt_infos_container (streamlit_obj): The Streamlit container where the placeholders will be created.
+
+    Returns:
+        tuple: A tuple of six Streamlit placeholder objects, in the order:
+               (download_progress, download_success, run_progress, run_success, download_fail, run_fail).
+
+    """
     with opt_infos_container:
         col_progress, col_success, col_failed = st.columns(3)
 
@@ -512,6 +571,7 @@ def create_info_placeholders(opt_infos_container):
         with col_failed:
             download_fail_placeholder = st.empty()
             run_fail_placeholder = st.empty()
+
     return (
         download_progress_placeholder,
         download_success_placeholder,
@@ -522,7 +582,15 @@ def create_info_placeholders(opt_infos_container):
     )
 
 
-def check_incorrect_arguments():
+def check_incorrect_arguments_opt() -> bool:
+    """Check for incorrect or missing arguments required for the optimization process.
+
+    Displays an error message using Streamlit if any required argument is missing or invalid.
+
+    Returns:
+        bool: True if any incorrect argument is found, False otherwise.
+
+    """
     if not ss.tickers:
         st.error(MESSAGES["display_texts"]["messages"]["enter_ticker_error"])
         return True
@@ -535,19 +603,35 @@ def check_incorrect_arguments():
     else:
         return False
 
-        # display_results()
-        # #     ticker_results=all_ticker_results,
-        # #     benchmark_comparison=benchmark_comparison,
-        # #     is_optimization_mode=True,
-        # #     obj_func=objective_function_selection,
-        # # )
-
 
 def manage_opt_run_infos(
     run_success_placeholder: streamlit_obj,
     run_fail_placeholder: streamlit_obj,
     ticker: str,
 ) -> None:
+    """Update and display the status of optimization runs for a given ticker.
+
+    This function updates the Streamlit session state lists for successful and failed
+    optimization runs based on whether the ticker is present in the optimization
+    results. It then displays a success or error message in the provided Streamlit
+    placeholders, listing all tickers that have completed successfully or failed so far.
+
+    Args:
+        run_success_placeholder (streamlit_obj): Streamlit placeholder for displaying
+            success messages related to optimization runs.
+        run_fail_placeholder (streamlit_obj): Streamlit placeholder for displaying
+            error messages related to failed optimization runs.
+        ticker (str): The ticker symbol for which the optimization run was attempted.
+
+    Returns:
+        None: This function modifies the Streamlit UI and session state directly.
+
+    Side Effects:
+        - Appends the ticker to `st.session_state.successful_runs_tickers` or
+          `st.session_state.failed_runs_tickers`.
+        - Updates the UI with a message listing all successful or failed tickers.
+
+    """
     if ticker in ss.opt_combs_ranking:
         st.session_state.successful_runs_tickers.append(ticker)
         run_success_placeholder.success(

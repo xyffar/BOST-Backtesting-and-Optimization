@@ -23,7 +23,13 @@ def download_data(ticker: str, start_date: str, end_date: str, interval: str) ->
     """
     try:
         data = yf.download(
-            ticker, start=start_date, end=end_date, interval=interval, progress=False, multi_level_index=False
+            ticker,
+            start=start_date,
+            end=end_date,
+            interval=interval,
+            progress=False,
+            multi_level_index=False,
+            auto_adjust=True,
         )  # Disable yfinance's internal progress
 
         if data.empty:
@@ -93,6 +99,7 @@ def get_sp500_data(start_date: str, end_date: str, interval: str) -> tuple[pd.Da
             interval=interval,
             progress=False,
             multi_level_index=False,
+            auto_adjust=True,
         )  # Disable yfinance's internal progress
         if data.empty:
             return (
