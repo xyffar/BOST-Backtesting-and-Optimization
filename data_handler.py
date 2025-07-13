@@ -1,10 +1,9 @@
 # data_handler.py
 
 import pandas as pd
-import streamlit as st
 import yfinance as yf
 
-from config import MESSAGES, streamlit_obj
+from config import MESSAGES, ss, streamlit_obj
 
 
 def download_data(ticker: str, start_date: str, end_date: str, interval: str) -> tuple[pd.DataFrame | None, str, str]:
@@ -24,7 +23,7 @@ def download_data(ticker: str, start_date: str, end_date: str, interval: str) ->
     """
     try:
         data = yf.download(
-            ticker, start=start_date, end=end_date, interval=interval, progress=False
+            ticker, start=start_date, end=end_date, interval=interval, progress=False, multi_level_index=False
         )  # Disable yfinance's internal progress
 
         if data.empty:
@@ -93,6 +92,7 @@ def get_sp500_data(start_date: str, end_date: str, interval: str) -> tuple[pd.Da
             end=end_date,
             interval=interval,
             progress=False,
+            multi_level_index=False,
         )  # Disable yfinance's internal progress
         if data.empty:
             return (
@@ -160,10 +160,6 @@ def calculate_benchmark_return(benchmark_data: pd.DataFrame) -> float:
 
 
 def get_ticker_data_and_infos(
-    tickers: list[str],
-    start_date_yf: str,
-    end_date_yf: str,
-    data_interval: str,
     download_progress_placeholder: streamlit_obj,
     download_success_placeholder: streamlit_obj,
     download_fail_placeholder: streamlit_obj,
@@ -199,22 +195,21 @@ def get_ticker_data_and_infos(
     """
     download_progress_placeholder.info(
         MESSAGES["display_texts"]["messages"]["downloading_ticker"].format(
-            ticker=ticker, current_idx=i + 1, total_tickers=len(tickers)
+            ticker=ticker, current_idx=i + 1, total_tickers=len(ss.tickers)
         )
     )
-    data, status, msg = download_data(ticker, start_date_yf, end_date_yf, data_interval)
+    data, status, msg = download_data(ticker, ss.start_date_wid, ss.end_date_wid, ss.data_interval_wid)
     download_progress_placeholder.empty()  # Remove blue progress box
 
     if status == "success":
-        st.session_state.successful_downloads_tickers.append(ticker)
+        ss.successful_downloads_tickers.append(ticker)
         download_success_placeholder.success(
             MESSAGES["display_texts"]["messages"]["download_success_ticker"]
-            + ", ".join(st.session_state.successful_downloads_tickers)
+            + ", ".join(ss.successful_downloads_tickers)
         )
     else:
-        st.session_state.failed_downloads_tickers.append(ticker)
+        ss.failed_downloads_tickers.append(ticker)
         download_fail_placeholder.error(
-            MESSAGES["display_texts"]["messages"]["download_failed_ticker"]
-            + ", ".join(st.session_state.failed_downloads_tickers)
+            MESSAGES["display_texts"]["messages"]["download_failed_ticker"] + ", ".join(ss.failed_downloads_tickers)
         )
     return data

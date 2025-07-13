@@ -1,7 +1,8 @@
 {
     "python.defaultInterpreterPath": "C:\\Users\\raffa\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
     "workbench.editorAssociations": {
-        "*.xlsx": "gc-excelviewer-excel-editor"
+        "*.xlsx": "gc-excelviewer-excel-editor",
+        "*.svg": "cweijan.officeViewer"
     },
     "launch": {
         "configurations": []

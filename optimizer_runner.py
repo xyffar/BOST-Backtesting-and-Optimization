@@ -10,122 +10,103 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 from backtesting import Backtest
+from sambo.plot import plot_convergence, plot_evaluations, plot_objective
 
 from backtest_runner import get_benchmark_data, run_backtest
-from config import MESSAGES, streamlit_obj
+from config import MESSAGES, ss, streamlit_obj
 from data_handler import get_ticker_data_and_infos
-from display_results import display_results
 from excel_exporter import log_execution_data
 from monte_carlo import run_montecarlos_for_best_combs
 from strategies.common_strategy import CommonStrategy
-from utils import OptimizationRecorder, list_varying_params, record_all_optimizations
+from utils import (
+    OptimizationRecorder,
+    add_benchmark_comparison,
+    list_varying_params,
+    record_all_optimizations,
+    reset_ss_values_for_results,
+)
 
 # Alias di tipo per maggiore chiarezza e leggibilità
 OptimizationParamsRanges = dict[str, range | tuple[float, float, float] | list[Any]]
-BacktestOptimizationOutput = pd.Series | tuple[pd.Series, pd.Series]
+BacktestOptimizationOutput = tuple[pd.DataFrame, Any] | None
 
 
-def _initialize_backtest_instance(
+def _initialize_bt_instance(
     data: pd.DataFrame,
-    strategy_class: list[Backtest],  # Assumendo che strategy_class sia una classe ereditata da backtesting.Strategy
-    initial_capital: float,
-    commission_percent: float,
-) -> Backtest:
+) -> Backtest | None:
     """Initialize and return a Backtest instance.
+
+    Configures a `backtesting.Backtest` instance with the provided data and
+    global settings (strategy, capital, commission) from the session state.
 
     Args:
         data (pd.DataFrame): Financial data (OHLCV) for the backtest.
-        strategy_class (list[Backtest]): The strategy class to be tested.
-        initial_capital (float): Initial capital.
-        commission_percent (float): Commission percentage per trade.
 
     Returns:
-        Backtest: A configured Backtest instance.
+        Backtest | None: A configured Backtest instance, or None if the selected
+                        strategy is not found in the session state.
 
     """
+    strategy_name = ss.get("opt_strategy_wid")
+    strategy_class = ss.get("all_strategies", {}).get(strategy_name)
+
+    if not strategy_class:
+        st.error(f"Strategy '{strategy_name}' not found. Cannot initialize backtest.")
+        return None
+
     return Backtest(
         data,
         strategy_class,
-        cash=initial_capital,
-        commission=commission_percent,
-        exclusive_orders=True,  # Consente una sola posizione alla volta
+        cash=ss.get("initial_capital_wid", 10000),
+        commission=ss.get("commission_percent_wid", 0.2) / 100,
+        exclusive_orders=True,  # Allows only one position at a time
     )
-
-
-# def _get_optimization_objective(objective_function_key: str) -> tuple[str, bool, str]:
-#     """Retrieve the optimization objective function from the config.
-
-#     The key is the metric name (and also the display name for the UI).
-#     The value associated with the key is a boolean indicating whether to maximize (True) or minimize (False).
-
-#     Args:
-#         objective_function_key (str): Key of the objective function.
-
-#     Returns:
-#         tuple: (str, bool, str) - Objective function string, whether to maximize, display name.
-
-#     Raises:
-#         ValueError: If the objective function key is invalid or its format is incorrect.
-
-#     """
-#     maximize_bool: bool | None = MESSAGES["optimization_settings"]["objectives"].get(objective_function_key)
-
-#     if maximize_bool is None:
-#         raise ValueError(
-#             MESSAGES["display_texts"]["optimizer_runner"]["invalid_objective_function"].format(
-#                 key=objective_function_key
-#             )
-#             + MESSAGES["display_texts"]["optimizer_runner"]["check_config_format_simple"]
-#         )
-
-#     if not isinstance(maximize_bool, bool):
-#         raise ValueError(
-#             MESSAGES["display_texts"]["optimizer_runner"]["invalid_objective_function"].format(
-#                 key=objective_function_key
-#             )
-#             + MESSAGES["display_texts"]["optimizer_runner"]["invalid_objective_value_type"].format(
-#                 key=objective_function_key, type=type(maximize_bool).__name__
-#             )
-#         )
-
-#     objective_func: str = objective_function_key
-#     objective_display_name: str = objective_function_key
-
-#     return objective_func, maximize_bool, objective_display_name
 
 
 def _process_params_ranges(
     params_ranges: OptimizationParamsRanges,
-) -> dict[str, list[Any] | Any]:
-    """Prepare parameter ranges for backtesting.py.
+) -> dict[str, list[Any]]:
+    """Prepare parameter ranges for the backtesting.py optimizer.
 
-    Converts 'range' objects and float tuples into lists/tuples suitable for optimization.
+    Converts UI-defined parameter ranges (e.g., `range` objects for integers,
+    tuples for floats) into lists of values that the `backtesting.py`
+    `optimize` method can consume.
 
     Args:
-        params_ranges (OptimizationParamsRanges): Dictionary of parameter ranges as defined by the UI.
+        params_ranges (OptimizationParamsRanges): A dictionary where keys are
+            parameter names and values are either `range` objects, tuples of
+            (min, max, step) for floats, or lists of categorical values.
 
     Returns:
-        dict[str, list[Any] | Any]: Dictionary of processed parameters for backtesting.py.
+        dict[str, list[Any]]: A dictionary of processed parameters, where each
+                              value is a list of discrete values to test.
 
     """
-    processed_params: dict[str, list[Any] | Any] = {}
+    processed_params: dict[str, list[Any]] = {}
+    messages = MESSAGES.get("display_texts", {}).get("optimizer_runner", {})
+
     for param, val_range in params_ranges.items():
         if isinstance(val_range, range):
             processed_params[param] = list(val_range)
         elif isinstance(val_range, tuple) and len(val_range) == 3:
-            min_val, max_val, step_val = val_range
-            # Aggiusta leggermente max_val per assicurare l'inclusione se lo step è piccolo
-            # e la precisione del float causa problemi
-            processed_params[param] = np.arange(min_val, max_val + step_val / 2, step_val).tolist()
+            # Use np.linspace for robust float ranges
+            min_val, max_val, step = val_range
+            if step <= 0:
+                st.warning(f"Step for parameter '{param}' must be positive. Using single value.")
+                processed_params[param] = [min_val]
+                continue
+            num_steps = round((max_val - min_val) / step) + 1
+            processed_params[param] = np.linspace(min_val, max_val, num_steps).tolist()
         elif isinstance(val_range, list):
             processed_params[param] = val_range
         else:
             st.warning(
-                MESSAGES["display_texts"]["optimizer_runner"]["unexpected_param_range_type"].format(
+                messages.get("unexpected_param_range_type", "Unexpected param range type for {param}: {type}.").format(
                     param=param, type=type(val_range).__name__
                 )
             )
-            processed_params[param] = [val_range]  # Tratta come un singolo valore se il tipo è inaspettato
+            # Treat as a single value if the type is unexpected
+            processed_params[param] = [val_range]
 
     return processed_params
 
@@ -133,10 +114,6 @@ def _process_params_ranges(
 def _execute_optimization(
     bt: Backtest,
     processed_params_ranges: dict[str, list[Any] | Any],
-    objective_func: str,
-    method: str,
-    strategy_class: list[Backtest],
-    sambo_tries: int,
     custom_constraint: Callable | None = None,
 ) -> BacktestOptimizationOutput:
     """Execute the core of the optimization with backtesting.py, handling different methods.
@@ -144,97 +121,111 @@ def _execute_optimization(
     Args:
         bt (Backtest): The Backtest instance.
         processed_params_ranges (dict[str, list[Any] | Any]): Parameters ready for optimization.
-        objective_func (str): The objective metric for optimization.
-        method (str): The optimization method ("Grid Search" or "SAMBO").
-        strategy_class (list[Backtest]): The strategy class to optimize.
         custom_constraint (Callable | None): A custom constraint function, if provided.
-        sambo_tries (int): The number of tries for the SAMBO optimization method.
 
     Returns:
-        BacktestOptimizationOutput: The raw output of the bt.optimize() function.
-
-    Raises:
-        ValueError: If the optimization method is not supported.
+        BacktestOptimizationOutput: A tuple containing the results DataFrame and optional
+                                    SAMBO optimization data, or None if it fails.
 
     """
-    # Tenta di ottenere il vincolo di ottimizzazione dalla classe della strategia
+    # Get the strategy class from session state to find its constraint
+    strategy_class = ss.get("all_strategies", {}).get(ss.get("opt_strategy_wid"))
     constraint_func = get_constraint(strategy_class, custom_constraint)
-    method_arg = MESSAGES["optimization_settings"]["methods"][method]
 
-    if method in MESSAGES["optimization_settings"]["methods"]:
+    # Safely get the optimization method argument from config
+    messages = MESSAGES.get("display_texts", {}).get("optimizer_runner", {})
+    method_arg = MESSAGES.get("optimization_settings", {}).get("methods", {}).get(ss.get("opt_method_wid"))
+
+    if not method_arg:
+        st.error(
+            messages.get("optimization_method_not_supported", "Optimization method '{method}' not supported.").format(
+                method=ss.get("opt_method_wid")
+            )
+        )
+        return None
+
+    try:
         with record_all_optimizations(bt) as recorder:
             result = bt.optimize(
                 **processed_params_ranges,
-                maximize=objective_func,
+                maximize=ss.get("opt_obj_func_wid"),
                 method=method_arg,
                 constraint=constraint_func,
-                random_state=None,  # Seed to ensure reproducible results
-                return_optimization=(method_arg == "sambo"),  # Need to get results for SAMBO plots
-                max_tries=sambo_tries,
-                return_heatmap=False,  # we will get the heatmaps with the results of recorder
+                random_state=None,
+                return_optimization=(method_arg == "sambo"),
+                max_tries=ss.get("max_tries_SAMBO_wid"),
+                return_heatmap=False,
             )
-            sambo_data = None if method_arg == "grid" else result[1]
-            return _manipulate_opt_results(processed_params_ranges, recorder, objective_func), sambo_data
-    else:
-        raise ValueError(
-            MESSAGES["display_texts"]["optimizer_runner"]["optimization_method_not_supported"].format(method=method)
-        )
 
-    # if method == "Grid Search":
-    #     # Per Grid Search, backtesting.py restituisce (stats, heatmap_series)
-    #     with record_all_optimizations(bt) as recorder:
-    #         bt.optimize(
-    #             **processed_params_ranges,
-    #             maximize=objective_func,
-    #             method="grid",
-    #             constraint=constraint_func,
-    #             return_heatmap=True,
-    #         )
-    #         return _manipulate_opt_results(processed_params_ranges, recorder, objective_func)
+            # Safely extract SAMBO data if the method returned it
+            sambo_data = result[1] if method_arg == "sambo" and isinstance(result, tuple) else None
 
-    # elif method == "SAMBO":
-    #     # Per SAMBO, backtesting.py restituisce un singolo oggetto stats con i risultati dell'ottimizzazione allegati
-    #     return bt.optimize(
-    #         **processed_params_ranges,
-    #         maximize=objective_func,
-    #         method="sambo",
-    #         constraint=constraint_func,
-    #         random_state=42,  # Assicura la riproducibilità
-    #         return_optimization=True,  # Questo restituisce l'oggetto ottimizzatore che contiene i metodi di plotting
-    #         max_tries=sambo_tries,
-    #         return_heatmap=True,
-    #     )
-    # else:
-    #     raise ValueError(
-    #         MESSAGES["display_texts"]["optimizer_runner"]["optimization_method_not_supported"].format(method=method)
-    #     )
+            # Process the recorded results
+            all_results_df = _manipulate_opt_results(processed_params_ranges, recorder, ss.get("opt_obj_func_wid"))
+
+            if all_results_df is None or all_results_df.empty:
+                return None
+
+            return all_results_df, sambo_data
+    except Exception as e:
+        st.error(messages.get("optimization_error", "Error during optimization: {e}").format(e=e))
+        return None
 
 
 def _manipulate_opt_results(
-    processed_params_ranges: dict[str, list[Any] | Any],
+    processed_params_ranges: dict[str, list[Any]],
     recorder: OptimizationRecorder,
     objective_func: str,
-) -> pd.DataFrame:
+) -> pd.DataFrame | None:
+    """Process and clean the raw optimization results from the recorder.
+
+    This function takes the raw results, sets the parameter columns as the index,
+    extracts trade returns, removes duplicate combinations, and sorts the
+    results by the objective function.
+
+    Args:
+        processed_params_ranges (dict[str, list[Any]]): The dictionary of parameter ranges used.
+        recorder (OptimizationRecorder): The recorder object containing the raw results.
+        objective_func (str): The name of the objective function used for sorting.
+
+    Returns:
+        pd.DataFrame | None: A cleaned and sorted DataFrame of optimization results,
+                              or None if no valid results were found.
+
+    """
     all_results = recorder.get_dataframe()
-    if len(all_results) == 0 or all_results is None:
-        st.error("The optimizer returned no result!")
+    if all_results is None or all_results.empty:
+        st.error(
+            MESSAGES.get("display_texts", {})
+            .get("optimizer_runner", {})
+            .get("no_valid_results", "The optimizer returned no valid results.")
+        )
         return None
-    all_results = all_results.set_index([col for col in processed_params_ranges if col in all_results.columns])
-    all_results = all_results[[*list(MESSAGES["optimization_settings"]["objectives"].keys()), "_trades"]]
+
+    # Set the parameter columns as the index
+    param_cols = [col for col in processed_params_ranges if col in all_results.columns]
+    all_results = all_results.set_index(param_cols)
+
+    # Select only the objective metrics and the trades column
+    objective_cols = list(MESSAGES.get("optimization_settings", {}).get("objectives", {}).keys())
+    all_results = all_results[[*objective_cols, "_trades"]]
+
+    # Extract the list of trade returns from the nested DataFrame
     all_results["_trades"] = all_results["_trades"].apply(
         lambda nested_df: (
-            nested_df["ReturnPct"].values
+            nested_df["ReturnPct"].to_numpy()
             if isinstance(nested_df, pd.DataFrame) and "ReturnPct" in nested_df.columns
             else np.nan
         )
     )
     all_results.rename(columns={"_trades": "Trade_returns"}, inplace=True)
-    all_results = all_results.drop_duplicates(
-        subset=[col for col in all_results.columns if all_results[col].dtype != list], keep="first"
-    )
-    return all_results.sort_values(
-        by=objective_func, ascending=not MESSAGES["optimization_settings"]["objectives"][objective_func]
-    )
+
+    # Remove duplicate parameter combinations, keeping the first result
+    all_results = all_results.loc[~all_results.index.duplicated(keep="first")]
+
+    # Sort by the objective function
+    is_higher_better = MESSAGES.get("optimization_settings", {}).get("objectives", {}).get(objective_func, True)
+    return all_results.sort_values(by=objective_func, ascending=not is_higher_better)
 
 
 def get_constraint(strategy_class: backtesting.Strategy, custom_constraint: Callable | None) -> Callable | None:
@@ -325,472 +316,244 @@ def _plot_single_line_chart(results_df: pd.DataFrame, param_col: str, objective_
         return None
 
 
-def _generate_plots_for_grid_search_results(
-    results_df: pd.DataFrame, objective_display_name: str, maximize: bool
-) -> list[plt.Figure]:
-    """Generate a list of plots (heatmap or line) based on the number of varying parameters.
+def _generate_plots_for_grid_search_results(results_df: pd.DataFrame, objective_display_name: str, ticker: str) -> None:
+    """Generate and store plots based on the number of varying parameters.
 
-    If there are more than 2 varying parameters, it generates heatmaps for each pair combination.
-    """
-    heatmap_df = results_df.copy()
-    heatmap_df = heatmap_df[objective_display_name].reset_index()
-    # Identifica i parametri che variano (hanno più di un valore unico)
-    varying_param_names: list = list_varying_params(heatmap_df[heatmap_df.columns[:-1]])
+    This function analyzes the optimization results to determine how many
+    parameters were varied. It then generates the appropriate plot:
+    - 1 varying parameter: A line chart.
+    - 2 varying parameters: A heatmap.
+    - >2 varying parameters: A series of heatmaps for each pair combination.
 
-    all_generated_plots: list[plt.Figure] = []
-
-    if len(varying_param_names) == 2:
-        if fig := _plot_single_heatmap(
-            heatmap_df,
-            varying_param_names[0][1],
-            varying_param_names[1][1],
-            objective_display_name,
-        ):
-            all_generated_plots.append(fig)
-    elif len(varying_param_names) == 1:
-        if fig := _plot_single_line_chart(heatmap_df, varying_param_names[0][1], objective_display_name):
-            all_generated_plots.append(fig)
-    elif len(varying_param_names) > 2:
-        # Genera heatmaps per tutte le combinazioni di due parametri variabili
-        for param1, param2 in itertools.combinations(varying_param_names, 2):
-            if fig := _plot_single_heatmap(heatmap_df, param1[1], param2[1], objective_display_name):
-                all_generated_plots.append(fig)
-    return all_generated_plots
-
-
-def _handle_grid_search_results(
-    all_comb_data: tuple[pd.DataFrame, None],
-    objective_display_name: str,
-    maximize: bool,
-) -> tuple[
-    pd.DataFrame | None,
-    dict[str, Any] | None,
-    pd.Series | None,
-    list[plt.Figure] | None,
-]:
-    comb_stats = all_comb_data[0][MESSAGES["optimization_settings"]["objectives"].keys()]
-
-    # Genera i plot (heatmap/linea singola o multiple heatmap)
-    heatmap_plots: list[plt.Figure] = _generate_plots_for_grid_search_results(
-        comb_stats, objective_display_name, maximize
-    )
-
-    return all_comb_data[0], heatmap_plots
-
-
-def _handle_sambo_results(
-    optimization_output: tuple[pd.DataFrame, pd.DataFrame],
-    objective_display_name: str,
-    maximize: bool,
-) -> tuple[pd.DataFrame | None, dict[str, Any] | None, pd.Series | None, dict[str, Any] | None]:
-    # best_stats: dict[str, Any] = dict(optimization_output[0])
-
-    # # Accedi ai migliori parametri direttamente dall'oggetto strategia allegato a stats
-    # best_params: dict[str, Any] = optimization_output[0]._strategy._params
-
-    # # Crea un semplice DataFrame per visualizzare il ranking delle combinazioni
-    # results_df: pd.DataFrame = optimization_output[1].sort_values(ascending=not maximize).to_frame().reset_index()
-
-    return optimization_output[0], optimization_output[1]
-
-
-def run_optimization(
-    data: pd.DataFrame,
-    strategy_class: list[Backtest],
-    params_ranges: OptimizationParamsRanges,
-    objective_function_key: str,
-    optimization_method: str,
-    initial_capital: float,
-    commission_percent: float,
-    sambo_tries: int,
-    custom_constraint: Callable,
-) -> tuple[
-    pd.DataFrame | None,
-    dict[str, Any] | None,
-    pd.Series | None,
-    list[plt.Figure] | None,  # Modificato il tipo di ritorno per supportare più figure
-    dict[str, Any] | None,
-    str,
-    str,
-]:
-    """Run the optimization process for a given strategy and parameter ranges.
-
-    Executes the optimization using the specified method, processes results, and returns data for display and analysis.
+    The generated plots are stored in the Streamlit session state (`ss`).
 
     Args:
-        data (pd.DataFrame): Financial data for the backtest.
-        strategy_class (list[Backtest]): The strategy class to optimize.
-        params_ranges (OptimizationParamsRanges): Parameter ranges for optimization.
-        objective_function_key (str): The objective metric for optimization.
-        optimization_method (str): The optimization method ("Grid Search" or "SAMBO").
-        initial_capital (float): Initial capital for the backtest.
-        commission_percent (float): Commission percentage per trade.
-        sambo_tries (int): Number of tries for the SAMBO optimization method.
-        custom_constraint (Callable): Custom constraint function for parameter combinations.
-
-    Returns:
-        tuple: Contains all combination data, heatmap plots, SAMBO plots, status string, and message string.
+        results_df (pd.DataFrame): The DataFrame of optimization results.
+        objective_display_name (str): The name of the objective metric.
+        ticker (str): The ticker symbol, used as a key to store the plots.
 
     """
+    # Prepare a DataFrame with only the objective and parameter columns
+    plot_df = results_df[objective_display_name].reset_index()
+
+    # Identify which parameters have more than one unique value
+    varying_params: list[tuple[int, str]] = list_varying_params(plot_df.drop(columns=objective_display_name))
+    generated_plots: list[plt.Figure] = []
+
+    if len(varying_params) == 1:
+        param_name = varying_params[0][1]
+        if fig := _plot_single_line_chart(plot_df, param_name, objective_display_name):
+            generated_plots.append(fig)
+
+    elif len(varying_params) == 2:
+        param1_name = varying_params[0][1]
+        param2_name = varying_params[1][1]
+        if fig := _plot_single_heatmap(plot_df, param1_name, param2_name, objective_display_name):
+            generated_plots.append(fig)
+
+    elif len(varying_params) > 2:
+        # Generate heatmaps for all combinations of two varying parameters
+        param_names = [p[1] for p in varying_params]
+        for param1_name, param2_name in itertools.combinations(param_names, 2):
+            if fig := _plot_single_heatmap(plot_df, param1_name, param2_name, objective_display_name):
+                generated_plots.append(fig)
+
+    ss.opt_heatmaps[ticker] = generated_plots
+
+
+def run_optimization(data: pd.DataFrame, custom_constraint: Callable, ticker: str, benchmark_comparison: float) -> None:
+    """Run the full optimization workflow for a single ticker."""
     if data is None or data.empty:
-        return (
-            None,
-            None,
-            None,
-            None,
-            None,
-            "failure",
-            MESSAGES["display_texts"]["optimizer_runner"]["no_data_for_optimization"],
-        )
+        st.error(MESSAGES.get("display_texts", {}).get("optimizer_runner", {}).get("no_data_for_optimization", ""))
+        return
 
     start_time = time.perf_counter()
 
-    # 1. Inizializza l'istanza di Backtest
-    bt: Backtest = _initialize_backtest_instance(data, strategy_class, initial_capital, commission_percent)
+    # 1. Initialize the Backtest instance
+    bt = _initialize_bt_instance(data)
+    if not bt:
+        return
 
-    # # 2. Recupera l'obiettivo di ottimizzazione
-    # objective_func: str
-    # maximize: bool
-    # objective_display_name: str
-    try:
-        maximize = MESSAGES["optimization_settings"]["objectives"].get(objective_function_key)
-    except ValueError as ve:
-        return None, None, None, None, None, "failure", str(ve)
+    # 2. Prepare parameter ranges for the optimizer
+    processed_params = _process_params_ranges(ss.opt_params)
 
-    # 3. Prepara i range dei parametri per backtesting.py
-    processed_params: dict[str, list[Any] | Any] = _process_params_ranges(params_ranges)
+    # 3. Execute the core optimization
+    optimization_output = _execute_optimization(bt, processed_params, custom_constraint)
+    if not optimization_output:
+        return
 
-    heatmap_plots: list[plt.Figure] | None = None  # Modificato: ora è una lista di figure
-    sambo_plot_data: dict[str, Any] | None = None
+    all_comb_data, sambo_data = optimization_output
 
-    try:
-        # 4. Esegui il core dell'ottimizzazione
-        optimization_output: BacktestOptimizationOutput = _execute_optimization(
-            bt,
-            processed_params,
-            objective_function_key,
-            optimization_method,
-            strategy_class,
-            sambo_tries,
-            custom_constraint,
-        )  # Best stats, all combinations
+    # 4. Process results based on the optimization method
+    if ss.opt_method_wid == "Grid Search":
+        _generate_plots_for_grid_search_results(all_comb_data, ss.opt_obj_func_wid, ticker)
+    elif ss.opt_method_wid == "SAMBO" and sambo_data:
+        ss.opt_sambo_plots[ticker] = make_sambo_plots(all_comb_data, sambo_data)
 
-        # Gestisce il caso in cui l'ottimizzazione non produce risultati validi
-        if optimization_output is None:
-            return (
-                None,
-                None,
-                None,
-                None,
-                None,
-                "failure",
-                MESSAGES["display_texts"]["optimizer_runner"]["no_valid_results"],
-            )
+    # 5. Store results in session state
+    ss.opt_combs_ranking[ticker] = add_benchmark_comparison(all_comb_data, benchmark_comparison, ss.opt_obj_func_wid)
+    ss.trade_returns[ticker] = all_comb_data["Trade_returns"]
 
-        # Controllo specifico per l'output di Grid Search (tuple di Series) o SAMBO (singola Series)
-        if (
-            isinstance(optimization_output, tuple) and (optimization_output[0] is None or optimization_output[0].empty)
-        ) or (isinstance(optimization_output, pd.Series) and optimization_output.empty):
-            return (
-                None,
-                None,
-                None,
-                None,
-                None,
-                "failure",
-                MESSAGES["display_texts"]["optimizer_runner"]["no_valid_results"],
-            )
-
-        # 5. Estrai e formatta i risultati in base al metodo di ottimizzazione
-        if optimization_method == "Grid Search":
-            all_comb_data, heatmap_plots = _handle_grid_search_results(  # Assegna a heatmap_plots
-                optimization_output, objective_function_key, maximize
-            )
-        elif optimization_method == "SAMBO":
-            all_comb_data, sambo_plot_data = _handle_sambo_results(
-                optimization_output, objective_function_key, maximize
-            )
-
-        end_time = time.perf_counter()
-        pars_time_log = {
-            "n_combs": len(all_comb_data),
-            "periods": len(data),
-            "opt_method": optimization_method,
-            "strategy": strategy_class.DISPLAY_NAME,
-        }
-        log_execution_data(start_time, end_time, action="Optimization", **pars_time_log)
-
-        # Controllo finale se i risultati sono stati estratti con successo
-        if all_comb_data is None:
-            return (
-                None,
-                None,
-                None,
-                None,
-                None,
-                "failure",
-                MESSAGES["display_texts"]["optimizer_runner"]["no_valid_results"],
-            )
-
-        return (
-            all_comb_data,
-            heatmap_plots,
-            sambo_plot_data,
-            "success",
-            MESSAGES["display_texts"]["optimizer_runner"]["optimization_success"],
-        )
-
-    except ValueError as ve:
-        # Gestione specifica degli errori di valore (es. problemi di configurazione)
-        return None, None, None, None, None, "failure", str(ve)
-    except Exception as e:
-        # Gestione generica degli errori per problemi inaspettati durante l'ottimizzazione
-        return (
-            None,
-            None,
-            None,
-            None,
-            None,
-            "failure",
-            MESSAGES["display_texts"]["optimizer_runner"]["optimization_error"].format(e=e),
-        )
+    # 6. Log execution time
+    end_time = time.perf_counter()
+    pars_time_log = {
+        "n_combs": len(all_comb_data),
+        "periods": len(data),
+        "opt_method": ss.opt_method_wid,
+        "strategy": ss.opt_strategy_wid,
+    }
+    log_execution_data(start_time, end_time, action="Optimization", **pars_time_log)
 
 
 def start_optimization_process(
-    tickers: list[str],
-    start_date_yf: str,
-    end_date_yf: str,
-    data_interval: str,
-    initial_capital: float,
-    commission_percent: float,
-    objective_function_selection: str,
-    optimization_method_selection: str,
-    max_tries_sambo: int,
-    run_mc: bool,
-    promoted_combinations: int,
-    mc_sampling_method: str,
-    num_sims: int,
-    sims_length: int,
-    strat_class: type[CommonStrategy],
-    optimization_params_ranges: dict,
-    results_container: streamlit_obj,
-    run_wfo: bool,
-    wfo_n_cycles: int,
-    wfo_oos_ratio: float,
-    download_progress_placeholder: streamlit_obj,
-    download_success_placeholder: streamlit_obj,
-    run_progress_placeholder: streamlit_obj,  # Not accessed, but kept for signature compatibility
-    run_success_placeholder: streamlit_obj,
-    download_fail_placeholder: streamlit_obj,
-    run_fail_placeholder: streamlit_obj,
+    opt_infos_container: streamlit_obj,
+    opt_results_container: streamlit_obj,
 ) -> None:
-    """Start the optimization process for the selected tickers and strategy.
+    if ss.opt_results_generated:
+        _reset_info_res_containers(opt_infos_container, opt_results_container)
+        reset_ss_values_for_results()
+        return
 
-    Handles data loading, optimization execution, Monte Carlo simulation, Walk Forward Optimization, and result display for all tickers.
+    if check_incorrect_arguments():
+        return
 
-    Args:
-        tickers: List of ticker symbols to optimize.
-        start_date_yf: Start date for data download.
-        end_date_yf: End date for data download.
-        data_interval: Data granularity (e.g., '1d').
-        initial_capital: Initial capital for the optimization.
-        commission_percent: Commission percentage for trades.
-        objective_function_selection: Selected objective function for optimization.
-        optimization_method_selection: Selected optimization method.
-        max_tries_sambo: Maximum tries for SAMBO optimization.
-        run_mc: Whether to run Monte Carlo simulation.
-        promoted_combinations: Number of promoted combinations for MC.
-        mc_sampling_method: Monte Carlo sampling method.
-        num_sims: Number of Monte Carlo simulations.
-        sims_length: Number of trades per simulation.
-        strat_class: The selected strategy class.
-        optimization_params_ranges: Parameter ranges for optimization.
-        results_container: Streamlit container for displaying results.
-        run_wfo: Whether to run Walk Forward Optimization.
-        wfo_n_cycles: Number of WFO cycles.
-        wfo_oos_ratio: Out-of-sample ratio for WFO.
-        download_progress_placeholder: Streamlit placeholder for download progress.
-        download_success_placeholder: Streamlit placeholder for download success.
-        run_progress_placeholder: Streamlit placeholder for run progress.
-        run_success_placeholder: Streamlit placeholder for run success.
-        download_fail_placeholder: Streamlit placeholder for download failure.
-        run_fail_placeholder: Streamlit placeholder for run failure.
+    reset_ss_values_for_results()
 
-    Returns:
-        None
+    _reset_info_res_containers(opt_infos_container, opt_results_container)
 
-    """
-    if not tickers:
-        st.error(MESSAGES["display_texts"]["messages"]["enter_ticker_error"])
-    elif strat_class is None:
-        st.error(MESSAGES["display_texts"]["messages"]["select_valid_strategy_error"])
-    elif not optimization_params_ranges:
-        st.error(MESSAGES["display_texts"]["messages"]["define_optimization_ranges_error"])
-    else:
-        all_ticker_results = {}
+    (
+        download_progress_placeholder,
+        download_success_placeholder,
+        run_progress_placeholder,
+        run_success_placeholder,
+        download_fail_placeholder,
+        run_fail_placeholder,
+    ) = create_info_placeholders(opt_infos_container)  # For backtest/optimization success/failure messages
 
-    # results_container = st.empty()
-    # download_progress_placeholder = st.empty()
-    # download_success_placeholder = st.empty()
-    # run_progress_placeholder = st.empty()
-    # run_success_placeholder = st.empty()
-    # download_fail_placeholder = st.empty()
-    # run_fail_placeholder = st.empty()
+    benchmark_stats: backtesting._stats._Stats = get_benchmark_data(
+        download_progress_placeholder,
+        download_success_placeholder,
+        ss.successful_downloads_tickers,
+        ss.failed_downloads_tickers,
+    )
+    benchmark_comparison: float = benchmark_stats[ss.opt_obj_func_wid]
 
-    download_progress_placeholder.container()
-    download_success_placeholder.empty()
-    download_success_placeholder.container()
-    run_progress_placeholder.container()
-    run_success_placeholder.container()
-    download_fail_placeholder.container()
-    run_fail_placeholder.container()
-
-    with results_container:
-        st.session_state.successful_downloads_tickers = []
-        st.session_state.failed_downloads_tickers = []
-        st.session_state.successful_runs_tickers = []
-        st.session_state.failed_runs_tickers = []
-
-        benchmark_stats = get_benchmark_data(
-            start_date_yf,
-            end_date_yf,
-            data_interval,
-            initial_capital,
-            commission_percent,
-            download_progress_placeholder,
-            download_success_placeholder,
-            st.session_state.successful_downloads_tickers,
-            st.session_state.failed_downloads_tickers,
-        )
-        benchmark_comparison = benchmark_stats[objective_function_selection]
-
+    with opt_results_container:
         progress_bar = st.progress(0)
 
-        for i, ticker in enumerate(tickers):
-            data = get_ticker_data_and_infos(
-                tickers,
-                start_date_yf,
-                end_date_yf,
-                data_interval,
-                download_progress_placeholder,
-                download_success_placeholder,
-                download_fail_placeholder,
-                i,
-                ticker,
+    for i, ticker in enumerate(ss.tickers):
+        data = get_ticker_data_and_infos(
+            download_progress_placeholder,
+            download_success_placeholder,
+            download_fail_placeholder,
+            i,
+            ticker,
+        )
+        with opt_results_container:
+            run_progress_placeholder = st.spinner(
+                MESSAGES["display_texts"]["messages"]["running_optimization"].format(
+                    ticker=ticker, current_idx=i + 1, total_tickers=len(ss.tickers)
+                ),
+                show_time=True,
             )
 
-            if data is not None:
-                with st.spinner(
-                    MESSAGES["display_texts"]["messages"]["running_optimization"].format(
-                        ticker=ticker, current_idx=i + 1, total_tickers=len(tickers)
-                    ),
-                    show_time=True,
-                ):
-                    (all_comb_data, heatmap_plot, sambo_plots, run_status, run_msg) = run_optimization(
-                        data,
-                        strat_class,
-                        optimization_params_ranges,
-                        objective_function_selection,
-                        optimization_method_selection,
-                        initial_capital,
-                        commission_percent,
-                        max_tries_sambo,
-                        None,
-                    )
+            with run_progress_placeholder:
+                run_optimization(
+                    data=data, custom_constraint=None, ticker=ticker, benchmark_comparison=benchmark_comparison
+                )
 
-                    # Cominciamo col Monte Carlo, se richiesto!!
-                    combs_with_mc_stats = run_montecarlos_for_best_combs(
-                        initial_capital,
-                        objective_function_selection,
-                        run_mc,
-                        promoted_combinations,
-                        mc_sampling_method,
-                        num_sims,
-                        sims_length,
-                        benchmark_stats,
-                        ticker,
-                        all_comb_data,
-                    )
-                    cycles_summary, combs_stats = initiate_wfo(
-                        data,
-                        strat_class,
-                        optimization_params_ranges,
-                        objective_function_selection,
-                        optimization_method_selection,
-                        initial_capital,
-                        commission_percent,
-                        max_tries_sambo,
-                        run_wfo,
-                        wfo_n_cycles,
-                        wfo_oos_ratio,
-                        all_comb_data[all_comb_data.columns[:-1]],
-                    )  # Passiamogli la lista delle combinazioni provate
+                # Cominciamo col Monte Carlo, se richiesto!!
+                run_montecarlos_for_best_combs(benchmark_stats, ticker)
+
+                # cycles_summary, combs_stats = initiate_wfo(
+                #     data,
+                #     strat_class,
+                #     optimization_params_ranges,
+                #     objective_function_selection,
+                #     optimization_method_selection,
+                #     initial_capital,
+                #     commission_percent,
+                #     max_tries_sambo,
+                #     run_wfo,
+                #     wfo_n_cycles,
+                #     wfo_oos_ratio,
+                #     all_comb_data[all_comb_data.columns[:-1]],
+                # )  # Passiamogli la lista delle combinazioni provate
 
                 manage_opt_run_infos(
-                    all_ticker_results,
                     run_success_placeholder,
                     run_fail_placeholder,
                     ticker,
-                    all_comb_data,
-                    heatmap_plot,
-                    sambo_plots,
-                    run_status,
-                    combs_with_mc_stats,
                 )
 
-            progress_bar.progress((i + 1) / len(tickers))
+            progress_bar.progress((i + 1) / len(ss.tickers))
 
-        display_results(
-            ticker_results=all_ticker_results,
-            benchmark_comparison=benchmark_comparison,
-            is_optimization_mode=True,
-            obj_func=objective_function_selection,
-        )
+    progress_bar.empty()
+
+    ss.opt_results_generated = True
+
+
+def _reset_info_res_containers(opt_infos_container, opt_results_container):
+    opt_infos_container.empty()
+    opt_results_container.empty()
+
+
+def create_info_placeholders(opt_infos_container):
+    with opt_infos_container:
+        col_progress, col_success, col_failed = st.columns(3)
+
+        # Placeholders for dynamic messages
+        with col_progress:
+            download_progress_placeholder = st.empty()
+            download_success_placeholder = st.empty()
+        with col_success:
+            run_progress_placeholder = st.empty()
+            run_success_placeholder = st.empty()
+        with col_failed:
+            download_fail_placeholder = st.empty()
+            run_fail_placeholder = st.empty()
+    return (
+        download_progress_placeholder,
+        download_success_placeholder,
+        run_progress_placeholder,
+        run_success_placeholder,
+        download_fail_placeholder,
+        run_fail_placeholder,
+    )
+
+
+def check_incorrect_arguments():
+    if not ss.tickers:
+        st.error(MESSAGES["display_texts"]["messages"]["enter_ticker_error"])
+        return True
+    elif ss.opt_strategy_wid is None:
+        st.error(MESSAGES["display_texts"]["messages"]["select_valid_strategy_error"])
+        return True
+    elif not ss.opt_params:
+        st.error(MESSAGES["display_texts"]["messages"]["define_optimization_ranges_error"])
+        return True
+    else:
+        return False
+
+        # display_results()
+        # #     ticker_results=all_ticker_results,
+        # #     benchmark_comparison=benchmark_comparison,
+        # #     is_optimization_mode=True,
+        # #     obj_func=objective_function_selection,
+        # # )
 
 
 def manage_opt_run_infos(
-    all_ticker_results: dict,
     run_success_placeholder: streamlit_obj,
     run_fail_placeholder: streamlit_obj,
     ticker: str,
-    optimization_results: object,
-    heatmap_plot: object,
-    sambo_plots: object,
-    run_status: str,
-    combs_with_mc_stats: object,
 ) -> None:
-    """Manage and update the UI and results dictionary after each optimization run.
-
-    Updates the success or failure placeholders and stores results for each ticker.
-
-    Args:
-        all_ticker_results (dict): Dictionary to store results for each ticker.
-        run_success_placeholder: Streamlit placeholder for success messages.
-        run_fail_placeholder: Streamlit placeholder for failure messages.
-        ticker (str): The ticker symbol for the current run.
-        optimization_results: Results of the optimization.
-        heatmap_plot: Generated heatmap plot(s) for the run.
-        sambo_plots: SAMBO-specific plots for the run.
-        run_status (str): Status string ("success" or "failure").
-        combs_with_mc_stats: Monte Carlo statistics for the best combinations.
-
-    Returns:
-        None
-
-    """
-    if run_status == "success":
+    if ticker in ss.opt_combs_ranking:
         st.session_state.successful_runs_tickers.append(ticker)
         run_success_placeholder.success(
             MESSAGES["display_texts"]["messages"]["execution_completed"]
             + ", ".join(st.session_state.successful_runs_tickers)
         )
-        if optimization_results is not None:
-            all_ticker_results[ticker] = (
-                optimization_results,
-                heatmap_plot,
-                sambo_plots,
-                combs_with_mc_stats,
-            )
     else:
         st.session_state.failed_runs_tickers.append(ticker)
         run_fail_placeholder.error(
@@ -1489,3 +1252,30 @@ class WalkForwardOptimizer:
 
         except ImportError:
             print("Matplotlib non disponibile per la visualizzazione")
+
+
+def make_sambo_plots(all_comb_data: pd.DataFrame, sambo_plots: object) -> None:
+    """Display SAMBO optimization plots for the given parameter combinations and plot data.
+
+    Args:
+        all_comb_data (pd.DataFrame): DataFrame containing all optimization combinations.
+        sambo_plots (object): SAMBO plot data object.
+
+    Returns:
+        None
+
+    """
+    varying_params: list[tuple[int, str]] = list_varying_params(all_comb_data.index.to_frame())
+    varying_param_names = [p[1] for p in varying_params]
+    varying_param_idx = [p[0] for p in varying_params]
+
+    return [
+        plot_objective(
+            sambo_plots,
+            names=varying_param_names,
+            plot_dims=varying_param_idx,
+            estimator="et",
+        ),
+        plot_evaluations(sambo_plots, names=varying_param_names, plot_dims=varying_param_idx),
+        plot_convergence(sambo_plots),
+    ]

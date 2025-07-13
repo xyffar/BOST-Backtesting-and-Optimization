@@ -8,6 +8,7 @@ import os  # Import the os module
 import threading
 from collections.abc import Callable
 from contextlib import contextmanager
+from copy import deepcopy
 from typing import Any
 
 import backtesting
@@ -15,6 +16,7 @@ import numpy as np  # Import numpy for rounding
 import pandas as pd
 import streamlit as st
 
+from config import MESSAGES, session_state_names, ss
 from strategies.common_strategy import CommonStrategy  # Importa la strategia base
 
 # Import necessary for handling Bokeh plots via streamlit-bokeh-events
@@ -37,7 +39,7 @@ def set_backtest_mode() -> None:
 
     Updates the Streamlit session state to indicate backtest mode.
     """
-    st.session_state.mode = "backtest"
+    ss.mode = "backtest"
 
 
 def set_optimization_mode() -> None:
@@ -45,7 +47,7 @@ def set_optimization_mode() -> None:
 
     Updates the Streamlit session state to indicate optimization mode.
     """
-    st.session_state.mode = "optimization"
+    ss.mode = "optimization"
 
 
 def calculate_optimization_combinations(opt_params_ranges: dict[str:Any]) -> int:
@@ -85,6 +87,7 @@ def calculate_optimization_combinations(opt_params_ranges: dict[str:Any]) -> int
     return int(total_combinations)
 
 
+@st.cache_resource
 def load_strategies() -> dict[str, type[CommonStrategy]]:
     """Find and dynamically load all strategy classes inheriting from CommonStrategy.
 
@@ -250,71 +253,6 @@ def calculate_sqn(trade_returns: np.ndarray) -> float:
     return (expectancy / std_expectancy) * np.sqrt(len(trade_returns))
 
 
-# def round_multiindex_float_levels(df: pd.DataFrame, decimals: int = 2) -> pd.DataFrame:
-#     """
-#     Arrotonda i valori float nei livelli di un DataFrame MultiIndex alla
-#     cifra decimale specificata per ridurre la frammentarietà.
-
-#     Args:
-#         df (pd.DataFrame): Il DataFrame con un MultiIndex.
-#         decimals (int): Il numero di cifre decimali a cui arrotondare.
-
-#     Returns:
-#         pd.DataFrame: Un nuovo DataFrame con il MultiIndex modificato,
-#                       dove i livelli float sono stati arrotondati.
-#                       Restituisce una copia del DataFrame originale se non ha un MultiIndex.
-#     """
-#     if not isinstance(df, pd.DataFrame):
-#         raise TypeError("L'input deve essere un'istanza di pandas.DataFrame.")
-
-#     if not isinstance(df.index, pd.MultiIndex):
-#         print(
-#             "Avviso: Il DataFrame non ha un MultiIndex. Restituisco il DataFrame originale."
-#         )
-#         return df.copy()
-
-#     # Ottieni i nomi dei livelli dell'indice originale
-#     original_level_names = df.copy().index.names
-
-#     # Ottieni le matrici (array) sottostanti per ciascun livello del MultiIndex
-#     # e prepara per la modifica
-#     modified_levels_data = []
-
-#     # df.index.levels restituisce una FrozenList di Index/CategoricalIndex.
-#     # Convertirli in array per manipolare i valori direttamente.
-#     for level_index_data in df.index.levels:
-#         level_array = (
-#             level_index_data.to_numpy()
-#         )  # Converte il livello in un array NumPy
-
-#         # Controlla se il dtype dell'array è numerico float
-#         if np.issubdtype(level_array.dtype, np.floating):
-#             # Arrotonda i valori float del livello
-#             rounded_array = np.round(level_array, decimals=decimals)
-#             modified_levels_data.append(rounded_array)
-#             print(
-#                 f"Livello '{original_level_names[len(modified_levels_data)-1]}' (tipo float) arrotondato a {decimals} decimali."
-#             )
-#         else:
-#             # Se il livello non è float, lo aggiunge così com'è
-#             modified_levels_data.append(level_array)
-#             print(
-#                 f"Livello '{original_level_names[len(modified_levels_data)-1]}' (tipo non float) lasciato invariato."
-#             )
-
-#     # Ricostruisci un nuovo MultiIndex con i dati modificati
-#     new_multiindex = pd.MultiIndex.from_arrays(
-#         modified_levels_data, names=original_level_names
-#     )
-
-#     # Crea un nuovo DataFrame con il MultiIndex arrotondato
-#     # Utilizza .copy() per assicurarsi di non modificare il DataFrame originale in-place
-#     df_rounded = df.copy()
-#     df_rounded.index = new_multiindex
-
-#     return df_rounded
-
-
 class OptimizationRecorder:
     """Thread-safe recorder for optimization results.
 
@@ -387,3 +325,65 @@ def record_all_optimizations(
     finally:
         # Always restore the original run method
         backtest_instance.run = original_run
+
+
+def _update_session_state_from_config(filter_func: Callable[[str, tuple], bool]) -> None:
+    """Update the Streamlit session state based on a filter condition.
+
+    Iterates through the `session_state_names` configuration and updates
+    session state for keys that satisfy the `filter_func`. The default
+    value for each key is deep-copied to prevent mutable default issues.
+
+    Args:
+        filter_func (Callable[[str, tuple], bool]): A function that takes a session
+            state key (name) and its config tuple `(default_value, is_result)`
+            and returns True if it should be updated.
+
+    """
+    updates_to_make = {
+        name: deepcopy(config[0]) for name, config in session_state_names.items() if filter_func(name, config)
+    }
+    ss.update(updates_to_make)
+
+
+def initialize_session_states() -> None:
+    """Initialize session state variables that are not already set.
+
+    Iterates through the `session_state_names` configuration and sets the
+    default value for any state variable that has not yet been initialized
+    in the current Streamlit session. This ensures that all required keys
+    exist in `st.session_state`.
+    """
+    # Update if the key `name` is not already in the session state.
+    _update_session_state_from_config(lambda name, config: name not in ss)
+
+
+def reset_ss_values_for_results() -> None:
+    """Reset all session state variables that hold results from a previous run.
+
+    Iterates through the `session_state_names` configuration and resets any
+    state variable where the `is_result` flag is True. This is used to clear
+    old data before a new backtest or optimization run.
+    """
+    # Update if the `is_result` flag (config[1]) is True.
+    _update_session_state_from_config(lambda name, config: config[1])
+
+
+def _get_opt_button_label() -> str:
+    """Determine the label for the optimization run button.
+
+    Returns 'Clear Results' if optimization results have already been generated,
+    otherwise returns 'Run Optimization'. This allows the button to toggle
+    its function between starting a new run and clearing old results.
+
+    All text labels are retrieved from the `MESSAGES` configuration with
+    safe fallbacks.
+
+    Returns:
+        str: The appropriate label for the button.
+
+    """
+    display_texts = MESSAGES.get("display_texts", {})
+    if ss.get("opt_results_generated", False):
+        return display_texts.get("reset_opt_results_button", "Clear Results")
+    return display_texts.get("run_optimization_button", "Run Optimization")

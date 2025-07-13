@@ -1,7 +1,6 @@
 # config.py
 
 import datetime as dt
-from copy import deepcopy
 from os.path import dirname, join
 
 import streamlit as st
@@ -14,7 +13,7 @@ ss = st.session_state
 session_state_names = {  # The first value indicate the default value when the app starts. The secondi indicates if it has to reset when a new backtest/optimization starts.
     "tickers": ([], False),  # List of tickers: list[str]
     "mode": ("backtest", False),  # Either backtest or optimization: str
-    "all_strategies": ([], False),  # Dictionary of all found strategies: dict[str, CommonStrategy]
+    "all_strategies": ({}, False),  # Dictionary of all found strategies: dict[str, CommonStrategy]
     "successful_downloads_tickers": ([], True),  # List of correctly downloaded tickers: list[str]
     "failed_downloads_tickers": ([], True),  # List of failed downloaded tickers: list[str]
     "successful_runs_tickers": ([], True),  # List of correctly backtested or optimized tickers: list[str]
@@ -43,21 +42,14 @@ session_state_names = {  # The first value indicate the default value when the a
     "backtest_mc_var_plot": ({}, True),
     "backtest_mc_returns_plot": ({}, True),
     "backtest_excel": ({}, True),
+    "opt_params": ({}, False),  # Dictionary of params for optimization: dict[str : list | range]
     "opt_results_generated": (False, True),  # Bool to indicate the presence of optimization results: bool
-    "opt_mc_results": ({}, True),
-    "opt_heatmaps": ({}, True),
-    "opt_sambo_plots": ({}, True),
+    "trade_returns": ({}, True),  # List of trade returns for each combination: dict{str: pd.Series[list[float]]}
     "opt_combs_ranking": ({}, True),
+    "opt_heatmaps": ({}, True),  # Dictionary with heatmaps: doct[str: list[plt.Figure]]
+    "opt_mc_results": ({}, True),
+    "opt_sambo_plots": ({}, True),
 }
-
-
-def initialize_session_states() -> None:
-    ss.update(
-        {name: deepcopy(session_state_names[name][0]) for name in session_state_names if name not in st.session_state}
-    )
-    # for name in session_state_names:
-    #     if name not in st.session_state:
-    #         ss[name] = session_state_names[name][0]
 
 
 # Default dates (last 5 years until today)

@@ -1,48 +1,67 @@
 # display_results.py
 
+from datetime import datetime
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import streamlit as st
 import streamlit_bokeh
-from sambo.plot import plot_convergence, plot_evaluations, plot_objective
 
 from config import MESSAGES, ss
-from utils import add_benchmark_comparison, list_varying_params
+from excel_exporter import export_to_excel
+
+
+def _manage_excel_file_backtest(excel_export_data: dict) -> None:
+    """Manage the export and download of backtest results as an Excel file.
+
+    Args:
+        excel_export_data (dict): Dictionary containing data to export to Excel.
+
+    Returns:
+        None
+
+    """
+    st.markdown("---")
+    st.subheader(MESSAGES["display_texts"]["messages"]["export_results_subheader"])
+    # Generate a timestamped filename
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    excel_filename = f"backtest_results_{timestamp}.xlsx"
+    excel_file = export_to_excel(excel_export_data, filename=excel_filename)
+    st.download_button(
+        label=MESSAGES["display_texts"]["messages"]["download_excel_button"],
+        data=excel_file,
+        file_name=excel_filename,
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 
 
 def display_results() -> None:
-    """Display backtest or optimization results in separate tabs for each ticker.
+    """Display backtest or optimization results in the Streamlit UI.
 
-    This function serves as the main entry point for presenting all analysis results
-    within the Streamlit application, dynamically adjusting the display based on
-    whether the application is in backtesting or optimization mode.
+    Act as the main rendering entry point after a backtest or optimization run
+    is completed. Check the application's mode ('backtest' or 'optimization')
+    and whether results have been generated before proceeding.
 
-    Args:
-        ticker_results (dict): Dictionary where keys are ticker symbols and values are
-                               the results for that ticker.
-                               In backtest mode, values are `(backtest_stats, equity_curve, trades_df, benchmark_comparison_df)`.
-                               In optimization mode, values are `(all_comb_data, heatmap_plots, sambo_plots, MC_data)`.
-        all_mc_statistics (dict[str : tuple[pd.DataFrame, pd.DataFrame, dict[str : int | str], np.ndarray, pd.DataFrame, pd.Series]], optional):
-            Dictionary where keys are ticker symbols and values are tuples containing
-            (df_percentiles, df_compare_benchmark, mc_pars, simulated_equity_lines, metrics_data, original_equity_path)
-            from Monte Carlo simulations. Defaults to None. This argument is primarily used in backtesting mode.
-        benchmark_comparison (float | int, optional):
-            The total percentage return of the benchmark asset (e.g., S&P 500)
-            for direct comparison. Defaults to None.
-        is_optimization_mode (bool, optional):
-            A boolean flag indicating if the application is currently in optimization mode.
-            Defaults to False, implying backtest mode.
-        obj_func (str, optional):
-            The name of the objective function used during optimization.
-            Relevant only if `is_optimization_mode` is True. Defaults to None.
+    Create a tabbed interface, with a separate tab for each ticker that has
+    results. Within each tab, delegate the rendering of detailed results to
+    mode-specific helper functions: `_display_backtest_results` for backtesting
+    and `_display_optimization_results` for optimization.
 
-    Returns:
-        None: This function directly renders content to the Streamlit UI.
+    For backtest mode, also render a download button to export a comprehensive
+    Excel report of the results.
+
+    All necessary data is retrieved from the Streamlit session state (`ss`).
+    This function takes no arguments and has no return value.
+
+    Side Effects:
+        Renders content to the Streamlit UI, including tabs, dataframes, and plots.
 
     """
-    if not ss.backtest_results_generated and not ss.opt_results_generated:
-        st.warning(MESSAGES["display_texts"]["messages"]["no_results_to_show"])
+    if (ss.mode == "backtest" and not ss.backtest_results_generated) or (
+        ss.mode == "optimization" and not ss.opt_results_generated
+    ):
+        # st.warning(MESSAGES["display_texts"]["messages"]["no_results_to_show"])
         return
 
     tickers_with_results = tuple((*ss.bt_stats.keys(), *ss.opt_combs_ranking.keys()))
@@ -55,59 +74,90 @@ def display_results() -> None:
 
             if ss.mode == "optimization":
                 _display_optimization_results(
-                    ticker_results[ticker],
-                    benchmark_comparison,
-                    obj_func,
+                    ticker
+                    # ticker_results[ticker],
+                    # benchmark_comparison,
+                    # obj_func,
                 )
             elif ss.mode == "backtest":
                 _display_backtest_results(ticker)
             else:
                 st.error("The mode is neither backtesting or optimization!")
+    if ss.backtest_results_generated:
+        _manage_excel_file_backtest(
+            {
+                key: (ss.backtest_trade_list.get(key), ss.backtest_comp_with_benchmark_df.get(key))
+                for key in ss.backtest_trade_list.keys() | ss.backtest_comp_with_benchmark_df.keys()
+            }
+        )
 
 
 def _display_optimization_results(
-    ticker_result: tuple,
-    benchmark_comparison: float | int | None,
-    obj_func: str | None,
+    ticker: str,
 ) -> None:
-    (all_comb_data, heatmap_plots, sambo_plots, mc_data) = ticker_result
+    # (all_comb_data, heatmap_plots, sambo_plots, mc_data) = ticker_result
 
-    if all_comb_data is None:
-        return
+    # if all_comb_data is None:
+    #     return
 
-    all_comb_data = show_results(benchmark_comparison, obj_func, all_comb_data)
+    show_results_all_combs_with_benchmark(ticker)
 
-    if heatmap_plots:
-        show_heatmaps(heatmap_plots)
-    elif sambo_plots:
-        show_sambo_plots(all_comb_data, sambo_plots)
+    if ticker in ss.opt_heatmaps:
+        show_heatmaps(ss.opt_heatmaps[ticker])
+    elif ticker in ss.opt_sambo_plots:
+        show_sambo_plots(ss.opt_sambo_plots[ticker])
     else:
         st.info(MESSAGES["display_texts"]["messages"]["heatmap_not_available"])
 
-    show_mc_results(mc_data)
+    if ticker in ss.opt_mc_results:
+        show_mc_results(ss.opt_mc_results[ticker])
 
 
-def show_results(
-    benchmark_comparison: float | int | None,
-    obj_func: str | None,
-    all_comb_data: pd.DataFrame,
-) -> pd.DataFrame:
-    """Display the optimization results table with benchmark comparison.
+def show_sambo_plots(sambo_plots: list[plt.Figure]) -> None:
+    """Display plots generated by the SAMBO optimization method.
+
+    Render a series of plots specific to the SAMBO (Sample-based
+    Optimization) method in a horizontal layout. Each plot is displayed
+    in its own column.
 
     Args:
-        benchmark_comparison (float | int | None): The benchmark value for comparison.
-        obj_func (str | None): The objective function used for optimization.
-        all_comb_data (pd.DataFrame): DataFrame containing all optimization combinations.
-
-    Returns:
-        pd.DataFrame: The DataFrame of all combinations (possibly filtered or modified).
+        sambo_plots (list[plt.Figure]): A list of matplotlib Figure objects
+            generated by the SAMBO library's plotting functions (e.g.,
+            `plot_objective`, `plot_evaluations`, `plot_convergence`).
 
     """
-    st.markdown(f"""#### {MESSAGES["display_texts"]["messages"]["table_combinations_header"]}""")
-    all_comb_data = all_comb_data[list(MESSAGES["optimization_settings"]["objectives"])]
-    cambinations_ranking_with_benchmark = add_benchmark_comparison(all_comb_data, benchmark_comparison, obj_func)
-    st.dataframe(cambinations_ranking_with_benchmark, use_container_width=True)
-    return all_comb_data
+    if not sambo_plots:
+        return
+
+    st.markdown(f"#### {MESSAGES['display_texts']['messages']['sambo_plots']}")
+    cols = st.columns(len(sambo_plots))
+    for col, fig in zip(cols, sambo_plots, strict=False):
+        with col:
+            st.pyplot(fig, use_container_width=True)
+            plt.close(fig)  # Explicitly close the figure to free up memory
+
+
+def show_results_all_combs_with_benchmark(ticker: str) -> None:
+    """Display the ranked table of all optimization combinations.
+
+    Render a subheader and a Streamlit DataFrame containing the results of all
+    parameter combinations from the optimization run for a specific ticker.
+
+    The data, retrieved from `ss.opt_combs_ranking[ticker]`, is expected to be
+    pre-sorted and include columns for benchmark comparison. If no data is
+    found for the ticker, an informational message is displayed.
+
+    Args:
+        ticker (str): The ticker symbol for which to display the results.
+
+    """
+    st.markdown(f"#### {MESSAGES['display_texts']['messages']['table_combinations_header']}")
+
+    if ticker not in ss.opt_combs_ranking or ss.opt_combs_ranking[ticker].empty:
+        st.info(f"No optimization ranking data available for {ticker}.")
+        return
+
+    st.dataframe(ss.opt_combs_ranking[ticker], use_container_width=True)
 
 
 def show_mc_results(mc_data: pd.DataFrame | None) -> None:
@@ -124,41 +174,6 @@ def show_mc_results(mc_data: pd.DataFrame | None) -> None:
         st.markdown("---")
         st.subheader("Analisi Monte Carlo")
         st.dataframe(mc_data)
-
-
-def show_sambo_plots(all_comb_data: pd.DataFrame, sambo_plots: object) -> None:
-    """Display SAMBO optimization plots for the given parameter combinations and plot data.
-
-    Args:
-        all_comb_data (pd.DataFrame): DataFrame containing all optimization combinations.
-        sambo_plots (object): SAMBO plot data object.
-
-    Returns:
-        None
-
-    """
-    st.markdown(f"#### {MESSAGES['display_texts']['messages']['sambo_plots']}")
-    varying_params: list[tuple[int, str]] = list_varying_params(all_comb_data.index.to_frame())
-    varying_param_names = [p[1] for p in varying_params]
-    varying_param_idx = [p[0] for p in varying_params]
-    cols_sambos = st.columns(3, border=True)
-    with cols_sambos[0]:
-        st.pyplot(
-            plot_objective(
-                sambo_plots,
-                names=varying_param_names,
-                plot_dims=varying_param_idx,
-                estimator="et",
-            ),
-            use_container_width=True,
-        )
-    with cols_sambos[1]:
-        st.pyplot(
-            plot_evaluations(sambo_plots, names=varying_param_names, plot_dims=varying_param_idx),
-            use_container_width=True,
-        )
-    with cols_sambos[2]:
-        st.pyplot(plot_convergence(sambo_plots), use_container_width=True)
 
 
 def show_heatmaps(heatmap_plots: list) -> None:
@@ -203,44 +218,54 @@ def _display_backtest_results(ticker: str) -> None:
 
 
 def show_montecarlo_results(ticker: str) -> None:
-    """Display detailed Monte Carlo simulation results for a given ticker.
+    """Display detailed Monte Carlo simulation results for a specific ticker.
 
-    This includes percentile dataframes, benchmark comparisons, and various
-    visualizations like simulated equity lines and histograms of key metrics.
+    Render pre-calculated Monte Carlo analysis results stored in the Streamlit
+    session state (`ss`). This includes dataframes for percentile statistics
+    and benchmark comparisons, and plots for simulated equity lines and
+    metric distributions (e.g., VaR, returns).
+
+    This function assumes that the Monte Carlo analysis has already been run
+    and the results are populated in the session state for the given ticker.
 
     Args:
-        all_mc_statistics (dict): Dictionary containing all Monte Carlo
-                                  statistics, keyed by ticker symbol. The value
-                                  for each ticker is expected to be a tuple
-                                  containing:
-                                  - df_percentiles (pd.DataFrame): Percentile statistics.
-                                  - df_compare_benchmark (pd.DataFrame): Benchmark comparison data.
-                                  - mc_pars (dict): Monte Carlo simulation parameters.
-                                  - simulated_equity_lines (np.ndarray): Array of simulated equity paths.
-                                  - metrics_data (pd.DataFrame): Metrics from Monte Carlo simulations.
-                                  - original_equity_path (pd.Series): The original equity curve.
         ticker (str): The ticker symbol for which to display Monte Carlo results.
 
-    Returns:
-        None: This function directly renders content to the Streamlit UI.
+    Side Effects:
+        - Renders a subheader, dataframes, and plots to the Streamlit UI.
+        - Closes matplotlib figures after rendering to free up memory.
 
     """
-    if ss.backtest_mc_percentiles[ticker] is not None and ss.backtest_mc_probs_benchmark[ticker] is not None:
-        st.markdown("---")
-        st.subheader("Monte Carlo Analysis")
-        st.dataframe(
-            ss.backtest_mc_percentiles[ticker].style.format(
-                {s: "{:.2f}" for s in ss.backtest_mc_percentiles[ticker].columns}
-            )
-        )
-        st.dataframe(ss.backtest_mc_probs_benchmark[ticker])
-        cols = st.columns(3)
-        with cols[0]:
-            st.pyplot(ss.backtest_mc_equity_lines_plot[ticker])
-        with cols[1]:
-            st.pyplot(ss.backtest_mc_var_plot[ticker])
-        with cols[2]:
-            st.pyplot(ss.backtest_mc_returns_plot[ticker])
+    # 1. Retrieve all necessary data from session state using .get() for safety
+    percentiles_df = ss.backtest_mc_percentiles.get(ticker)
+    benchmark_prob_df = ss.backtest_mc_probs_benchmark.get(ticker)
+    equity_lines_plot = ss.backtest_mc_equity_lines_plot.get(ticker)
+    var_plot = ss.backtest_mc_var_plot.get(ticker)
+    returns_plot = ss.backtest_mc_returns_plot.get(ticker)
+
+    # 2. Validate that all required data is available before attempting to render
+    if any(data is None for data in [percentiles_df, benchmark_prob_df, equity_lines_plot, var_plot, returns_plot]):
+        st.info(f"Monte Carlo results are not fully available for {ticker}.")
+        return
+
+    # 3. Render the UI components
+    st.markdown("---")
+    st.subheader(MESSAGES["display_texts"]["messages"]["monte_carlo_analysis_header"])
+
+    # Display dataframes with styling and optimal width
+    st.dataframe(
+        percentiles_df.style.format({col: "{:.2f}" for col in percentiles_df.columns}),
+        use_container_width=True,
+    )
+    st.dataframe(benchmark_prob_df, use_container_width=True)
+
+    # Display plots in columns and ensure figures are closed to free memory
+    cols = st.columns(3)
+    plots_to_show = [equity_lines_plot, var_plot, returns_plot]
+    for col, plot_fig in zip(cols, plots_to_show, strict=False):
+        with col:
+            st.pyplot(plot_fig, use_container_width=True)
+            plt.close(plot_fig)
 
 
 def show_montecarlo_histogram(
@@ -252,40 +277,65 @@ def show_montecarlo_histogram(
     percentile: int | float,
     nickname: str,
 ) -> None:
-    """Generate and displays a histogram for a given metric from Monte Carlo simulations.
+    """Generate a histogram from Monte Carlo simulation metrics and store it.
 
-    The histogram includes a vertical line indicating a specified percentile
-    (e.g., VaR for drawdown or return percentile).
+    Creates a matplotlib histogram for a given performance metric (e.g.,
+    Max Drawdown, Return). The plot includes a vertical dashed line to mark a
+    specific percentile value, which is useful for visualizing concepts like
+    Value at Risk (VaR).
+
+    The generated figure object is not displayed directly but is stored in the
+    Streamlit session state (`ss`) for later rendering.
 
     Args:
-        metric (pd.Series or np.array): The data series or array for which to
-                                        generate the histogram.
-        title (str): The title of the histogram plot.
+        ticker (str): The ticker symbol, used as a key for storing the plot.
+        metric (np.ndarray | pd.Series): The data series of a specific metric
+            from all Monte Carlo simulations.
+        title (str): The title for the histogram plot.
         x_label (str): The label for the x-axis.
-        perc_label (str): The label for the percentile line in the legend.
-        percentile (int or float): The percentile to mark on the histogram (e.g., 5 for 5th percentile).
+        perc_label (str): The descriptive label for the percentile line in the
+            legend (e.g., "VaR Drawdown [%]").
+        percentile (int | float): The percentile to calculate and mark on the
+            histogram (e.g., 5 for the 5th percentile).
+        nickname (str): The key under which the generated plot figure will be
+            stored in the session state (e.g., `ss[nickname][ticker]`).
 
-    Returns:
-        None: This function directly renders the plot to the Streamlit UI.
+    Side Effects:
+        - Creates a matplotlib Figure and stores it in `ss[nickname][ticker]`.
+        - Displays a warning in the UI if the metric data is empty.
 
     """
-    fig2, ax2 = plt.subplots(figsize=(10, 6))
-    ax2.hist(metric, bins=50, edgecolor="black", alpha=0.7)
-    ax2.set_title(title)
-    ax2.set_xlabel(x_label)
-    ax2.set_ylabel("Frequency")
-    ax2.axvline(
-        np.percentile(metric, 5),
+    if metric is None or len(metric) == 0:
+        st.warning(f"Cannot generate histogram for '{title}' for ticker {ticker} as no metric data is available.")
+        return
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.hist(metric, bins=50, edgecolor="black", alpha=0.7)
+    ax.set_title(title)
+    ax.set_xlabel(x_label)
+    ax.set_ylabel("Frequency")
+
+    percentile_value = np.percentile(metric, percentile)
+    confidence_level = 100 - percentile
+
+    # The label indicates the confidence level (e.g., 95%) corresponding to a percentile (e.g., 5th).
+    label_text = f"{perc_label} al {confidence_level}%: {percentile_value:.2f}"
+
+    ax.axvline(
+        percentile_value,  # Correctly use the calculated percentile value
         color="red",
         linestyle="dashed",
         linewidth=2,
-        label=f"{perc_label} al {100 - percentile}%: {np.percentile(metric, percentile):.2f}",
+        label=label_text,
     )
-    ax2.legend()
-    ax2.grid(True)
+    ax.legend()
+    ax.grid(True)
     plt.tight_layout()
-    ss[nickname][ticker] = fig2
-    # st.pyplot(fig2)
+
+    # Ensure the nested dictionary for the nickname exists before assignment
+    if nickname not in ss:
+        ss[nickname] = {}
+    ss[nickname][ticker] = fig
 
 
 def show_montecarlo_equity_lines(
@@ -295,47 +345,70 @@ def show_montecarlo_equity_lines(
     original_equity_path: np.ndarray | pd.Series,
     max_n_shown_lines: int = 200,
 ) -> None:
-    """Plot simulated Monte Carlo equity lines along with the original equity path.
+    """Generate and store a plot of simulated Monte Carlo equity lines.
 
-    Highlights the paths with the maximum and minimum final capital.
+    Creates a matplotlib plot showing multiple simulated equity paths from a
+    Monte Carlo analysis, highlighting the original path and the paths with
+    the maximum and minimum final capital.
+
+    The generated figure is not displayed directly but is stored in the
+    Streamlit session state (`ss.backtest_mc_equity_lines_plot[ticker]`) for
+    later rendering.
 
     Args:
-        mc_pars (dict): Dictionary containing Monte Carlo simulation parameters,
-                        including '# Simulations'.
+        ticker (str): The ticker symbol, used as a key for storing the plot.
+        mc_pars (dict): Dictionary of Monte Carlo parameters, must include
+                        '# Simulations'.
         simulated_equity_lines (np.ndarray): A 2D NumPy array where each row
-                                             represents a simulated equity path.
-        original_equity_path (pd.Series or np.array): The actual historical
-                                                      equity curve.
+                                             is a simulated equity path.
+        original_equity_path (np.ndarray | pd.Series): The historical equity curve.
         max_n_shown_lines (int, optional): The maximum number of simulated
-                                           equity lines to display in the plot
-                                           to prevent overcrowding. Defaults to 200.
+                                           equity lines to display to avoid
+                                           overcrowding. Defaults to 200.
 
-    Returns:
-        None: This function directly renders the plot to the Streamlit UI.
+    Side Effects:
+        - Creates a matplotlib Figure and stores it in `ss.backtest_mc_equity_lines_plot[ticker]`.
+        - Displays a warning in the UI if input data is invalid.
 
     """
-    num_sims = mc_pars["# Simulations"]
-    fig1, ax1 = plt.subplots(figsize=(12, 6))
-    # Plot di un sottoinsieme di linee simulate (per la massa)
-    num_percorsi_da_mostrare = min(max_n_shown_lines, num_sims)
-    for i in range(num_percorsi_da_mostrare):
-        ax1.plot(simulated_equity_lines[i, :], lw=0.7, alpha=0.6)  # Colore più tenue per lo sfondo
-        # Identifica la simulazione con il maggior capitale finale
-    idx_max_equity = np.argmax(simulated_equity_lines[:, -1])
-    max_equity_line = simulated_equity_lines[idx_max_equity, :]
-    # Identifica la simulazione con il minor capitale finale
-    idx_min_equity = np.argmin(simulated_equity_lines[:, -1])
-    min_equity_line = simulated_equity_lines[idx_min_equity, :]
-    # Plot delle linee specifiche sopra le altre
-    ax1.plot(original_equity_path, color="black", linewidth=3, label="Original")
-    ax1.plot(max_equity_line, color="green", linewidth=2.5, label="Max Final Capital")
-    ax1.plot(min_equity_line, color="red", linewidth=2.5, label="Min Final Capital")
+    # 1. Validate inputs
+    if (
+        simulated_equity_lines is None
+        or simulated_equity_lines.size == 0
+        or original_equity_path is None
+        or len(original_equity_path) == 0
+    ):
+        st.warning(f"Cannot generate equity lines plot for {ticker}: simulation data is missing or empty.")
+        return
 
-    ax1.set_title(f"Simulation of Monte Carlo Equity Lines ({num_sims} paths)")
-    ax1.set_xlabel("Trade")
-    ax1.set_ylabel("Capital")
-    ax1.grid(True)
-    ax1.legend()  # Aggiungi la legenda per le linee specifiche
+    num_sims = mc_pars.get("# Simulations", 0)
+    if num_sims == 0:
+        st.warning(f"Cannot generate equity lines plot for {ticker}: number of simulations is zero.")
+        return
+
+    # 2. Setup plot
+    fig, ax = plt.subplots(figsize=(12, 6))
+
+    # 3. Plot a subset of simulated lines for background context (vectorized for performance)
+    num_lines_to_show = min(max_n_shown_lines, num_sims)
+    ax.plot(simulated_equity_lines[:num_lines_to_show, :].T, color="lightblue", lw=0.7, alpha=0.6)
+
+    # 4. Find and plot highlighted lines (original, best, and worst cases)
+    final_capitals = simulated_equity_lines[:, -1]
+    idx_max_equity = np.argmax(final_capitals)
+    idx_min_equity = np.argmin(final_capitals)
+
+    ax.plot(original_equity_path, color="black", linewidth=3, label="Original")
+    ax.plot(simulated_equity_lines[idx_max_equity, :], color="green", linewidth=2.5, label="Max Final Capital")
+    ax.plot(simulated_equity_lines[idx_min_equity, :], color="red", linewidth=2.5, label="Min Final Capital")
+
+    # 5. Style the plot
+    ax.set_title(f"Simulation of Monte Carlo Equity Lines ({num_sims} paths)")
+    ax.set_xlabel("Trade")
+    ax.set_ylabel("Capital")
+    ax.grid(True)
+    ax.legend()
     plt.tight_layout()
-    ss.backtest_mc_equity_lines_plot[ticker] = fig1
-    # st.pyplot(fig1)
+
+    # 6. Store the plot in session state
+    ss.backtest_mc_equity_lines_plot[ticker] = fig

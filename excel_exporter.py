@@ -225,7 +225,6 @@ def export_to_excel(
         worksheet.write_string(0, 0, MESSAGES["display_texts"]["excel_exporter"]["no_results_found"])
     else:
         for ticker, (
-            _,
             trades_df,
             benchmark_comparison_df,
         ) in all_ticker_results.items():

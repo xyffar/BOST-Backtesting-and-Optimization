@@ -2,40 +2,45 @@
 
 import os
 import time
-from copy import deepcopy
-from datetime import datetime
 
 import numpy as np  # Importa numpy per np.nan
 import pandas as pd
 import streamlit as st
 from backtesting import Backtest
 
-from config import MESSAGES, session_state_names, ss, streamlit_obj
+from config import MESSAGES, ss, streamlit_obj
 from data_handler import download_data, get_sp500_data
-from display_results import display_results, show_montecarlo_equity_lines, show_montecarlo_histogram
-from excel_exporter import export_to_excel, log_execution_data
+from display_results import show_montecarlo_equity_lines, show_montecarlo_histogram
+from excel_exporter import log_execution_data
 from monte_carlo import run_montecarlo
 from strategies.buy_and_hold_strategy import BuyAndHoldStrategy
 from strategies.common_strategy import CommonStrategy
+from utils import reset_ss_values_for_results
 
 
 def compare_with_benchmark(strategy_stats: pd.Series, benchmark_stats: pd.Series | None) -> pd.DataFrame:
-    """Create a DataFrame that compares the performance metrics of the strategy with the benchmark.
+    """Compare strategy performance metrics against a benchmark.
 
-    Metrics include various return measures, volatility, Sharpe ratio, Sortino ratio,
-    drawdowns, trade statistics, and other performance indicators.
+    Creates a DataFrame for a side-by-side comparison of key performance
+    metrics from a strategy backtest against a benchmark backtest (e.g.,
+    Buy & Hold on an index like SPY).
+
+    The function uses a predefined list of metrics, extracts their values
+    from both the strategy and benchmark statistics Series, rounds them, and
+    formats them into a clean, readable table.
 
     Args:
-        strategy_stats (pd.Series): Complete statistics from the strategy backtest
-                                    (output of `Backtest.run()`).
-        benchmark_stats (pd.Series): Complete statistics from the Buy & Hold benchmark
-                                     backtest (output of `Backtest.run()`). Can be None
-                                     if benchmark data is not available.
+        strategy_stats (pd.Series): The complete statistics Series from the
+            strategy backtest, as returned by `backtesting.Backtest.run()`.
+        benchmark_stats (pd.Series | None): The complete statistics Series from
+            the benchmark backtest. If None, the benchmark column in the
+            resulting DataFrame will be filled with NaN values.
 
     Returns:
-        pd.DataFrame: A DataFrame comparing key metrics of the strategy and the benchmark,
-                      with metrics as index and 'Strategia' and 'Benchmark (SPY)' as columns.
-                      Numeric values are rounded to two decimal places.
+        pd.DataFrame: A DataFrame comparing key metrics. The index consists of
+            metric names (e.g., 'Return [%]', 'Sharpe Ratio'), and the
+            columns are 'Strategia' and 'Benchmark (SPY)'. Numeric values
+            are rounded to two decimal places.
 
     """
     metrics_to_display = [
@@ -102,32 +107,38 @@ def run_backtest(
     initial_capital: float,
     commission_percent: float,
     is_plot_wanted: bool = True,
-) -> tuple[pd.Series | None, str | None, pd.DataFrame | None, str, str]:
-    """Run a backtest for a given strategy and data using the `backtesting.py` library.
+) -> None:
+    """Execute a backtest for a single ticker using the specified strategy and parameters.
 
-    Logs execution times and can optionally generate an interactive plot of the equity curve.
+    This function initializes and runs a backtest using the `backtesting.py` library.
+    It logs the execution time, generates an interactive plot of the results,
+    and stores the backtest statistics, plot, and trade list in the Streamlit
+    session state.
 
     Args:
-        data (pd.DataFrame): Historical market data (OHLCV) on which to run the backtest.
-                             Must be in the format expected by `backtesting.py`.
-        strategy_name (str): The name of the strategy to backtest.
-        params (dict): A dictionary of parameters to pass to the strategy's `init` method.
-        initial_capital (float): The initial capital for the backtest.
-        commission_percent (float): Commission percentage per trade (e.g., 0.002 for 0.2%).
-        is_plot_wanted (bool, optional): If True, an interactive Bokeh plot of the
-                                         equity curve will be generated and returned as HTML.
-                                         Defaults to True.
+        ticker (str): The ticker symbol for which the backtest is being run.
+            Used as a key to store results in the session state.
+        data (pd.DataFrame): The OHLCV data for the asset as a pandas DataFrame.
+        strategy_name (str): The display name of the strategy to be backtested.
+            This name is used to look up the strategy class in `ss.all_strategies`.
+        params (dict): A dictionary of parameters to be passed to the strategy's `init` method.
+        initial_capital (float): The initial cash amount for the backtest.
+        commission_percent (float): The commission rate per trade, expressed as a decimal
+            (e.g., 0.001 for 0.1%).
+        is_plot_wanted (bool, optional): If True, an interactive plot of the backtest
+            results is generated and stored. Defaults to True.
 
     Returns:
-        tuple: A tuple containing:
-               - stats (pd.Series or None): Statistics of the backtest generated by `bt.run()`.
-                                            Returns None if the backtest fails.
-               - plot_html (str or None): HTML string of the interactive Bokeh plot.
-                                          Returns None if `is_plot_wanted` is False or if backtest fails.
-               - trades_df (pd.DataFrame or None): DataFrame containing details of individual trades.
-                                                   Returns None if the backtest fails.
-               - status (str): "success" if the backtest ran without errors, "failure" otherwise.
-               - message (str): A descriptive message indicating the outcome or error.
+        None: This function does not return any value. It modifies the Streamlit
+              session state (`ss`) directly with the backtest results.
+
+    Side Effects:
+        - Populates `ss.bt_stats[ticker]` with the backtest statistics (a pandas Series).
+        - Populates `ss.backtest_trade_list[ticker]` with a DataFrame of executed trades.
+        - If `is_plot_wanted` is True, populates `ss.backtest_interactive_plot[ticker]`
+          with a Bokeh plot object.
+        - Calls `log_execution_data` to log the performance of the backtest and plot generation.
+        - Displays an error message in the Streamlit UI via `st.error` if the backtest fails.
 
     """
     if data is None or data.empty:
@@ -182,16 +193,6 @@ def get_benchmark_data(
     This function handles the data download process and the subsequent backtest
     execution for the benchmark.
 
-    Args:
-        start_date_yf (str): Start date for data download in YYYY-MM-DD format,
-                             compatible with `yfinance`.
-        end_date_yf (str): End date for data download in YYYY-MM-DD format,
-                           compatible with `yfinance`.
-        data_interval (str): Data interval (e.g., "1d" for daily, "1h" for hourly).
-                             Must be compatible with `yfinance` intervals.
-        initial_capital (float): Initial capital for the benchmark backtest.
-        commission_percent (float): Commission percentage to apply to the benchmark
-                                    Buy & Hold backtest.
         download_progress_placeholder (streamlit.delta_generator.DeltaGenerator):
             A Streamlit placeholder object to display download progress messages.
         download_success_placeholder (streamlit.delta_generator.DeltaGenerator):
@@ -219,35 +220,36 @@ def get_benchmark_data(
     benchmark_raw_data, status, msg = get_sp500_data(ss.start_date_wid, ss.end_date_wid, ss.data_interval_wid)
     download_progress_placeholder.empty()  # Remove blue progress box
 
-    if status == "success":
-        successful_downloads_tickers.append(MESSAGES["general_settings"]["sp500_ticker"])
-        download_success_placeholder.success(
-            MESSAGES["display_texts"]["messages"]["download_success_benchmark"].format(
-                SP500_TICKER=MESSAGES["general_settings"]["sp500_ticker"]
-            )
-        )
-
-        # Run a backtest with BuyAndHold strategy on the benchmark
-        if benchmark_raw_data is not None and not benchmark_raw_data.empty:
-            try:
-                bt_benchmark = Backtest(
-                    benchmark_raw_data,
-                    BuyAndHoldStrategy,  # Use the BuyAndHold strategy
-                    cash=ss.initial_capital_wid,
-                    commission=ss.commission_percent_wid / 100,  # Apply commissions to benchmark too for parity
-                    exclusive_orders=True,
-                )
-                benchmark_stats = bt_benchmark.run()
-            except Exception as e:
-                st.warning(
-                    MESSAGES["display_texts"]["messages"]["error_calculating_benchmark_stats"].format(
-                        SP500_TICKER=MESSAGES["general_settings"]["sp500_ticker"], e=e
-                    )
-                )
-                benchmark_stats = None
-    else:
+    if status != "success":
         failed_downloads_tickers.append(MESSAGES["general_settings"]["sp500_ticker"])
         st.warning(MESSAGES["display_texts"]["messages"]["benchmark_data_not_available"])
+        return benchmark_stats
+
+    successful_downloads_tickers.append(MESSAGES["general_settings"]["sp500_ticker"])
+    download_success_placeholder.success(
+        MESSAGES["display_texts"]["messages"]["download_success_benchmark"].format(
+            SP500_TICKER=MESSAGES["general_settings"]["sp500_ticker"]
+        )
+    )
+
+    # Run a backtest with BuyAndHold strategy on the benchmark
+    if benchmark_raw_data is not None and not benchmark_raw_data.empty:
+        try:
+            bt_benchmark = Backtest(
+                benchmark_raw_data,
+                BuyAndHoldStrategy,  # Use the BuyAndHold strategy
+                cash=ss.initial_capital_wid,
+                commission=ss.commission_percent_wid / 100,  # Apply commissions to benchmark too for parity
+                exclusive_orders=True,
+            )
+            benchmark_stats = bt_benchmark.run()
+        except Exception as e:
+            st.warning(
+                MESSAGES["display_texts"]["messages"]["error_calculating_benchmark_stats"].format(
+                    SP500_TICKER=MESSAGES["general_settings"]["sp500_ticker"], e=e
+                )
+            )
+            benchmark_stats = None
     return benchmark_stats
 
 
@@ -255,27 +257,28 @@ def start_backtest_process(
     backtest_infos_container: streamlit_obj,
     backtest_results_container: streamlit_obj,
 ) -> None:
-    """Run the backtest process for the given tickers and strategy.
+    """Initiate and manage the full backtesting process.
 
-    This function manages the download of data, execution of backtests, Monte Carlo simulation, and result export for all selected tickers.
+    Orchestrate the entire backtesting workflow. Start by resetting relevant
+    session state variables and clearing UI containers. Then, fetch benchmark
+    data and iterate through each user-selected ticker. For each ticker,
+    download data, run the backtest with the specified strategy and parameters,
+    and optionally perform a Monte Carlo simulation. Display progress in the UI
+    throughout the process.
+
+    All inputs for the backtest (tickers, strategy, parameters, etc.) are
+    retrieved from the Streamlit session state (`ss`).
 
     Args:
-        tickers (list[str]): List of ticker symbols to backtest.
-        start_date_yf (str): Start date for data download.
-        end_date_yf (str): End date for data download.
-        data_interval (str): Data granularity (e.g., '1d').
-        initial_capital (float): Initial capital for the backtest.
-        commission_percent (float): Commission percentage for trades.
-        run_mc (bool): Whether to run Monte Carlo simulation.
-        mc_sampling_method (str): Monte Carlo sampling method.
-        sims_length (int): Number of trades per simulation.
-        num_sims (int): Number of Monte Carlo simulations.
-        strat_name (str): The name of the selected strategy.
-        strategy_params (dict): Parameters for the selected strategy.
-        backtest_results_container (streamlit.delta_generator.DeltaGenerator): Streamlit container for displaying backtest results.
+        backtest_infos_container (streamlit_obj): The Streamlit container
+            designated for displaying informational messages, such as download
+            and run progress.
+        backtest_results_container (streamlit_obj): The Streamlit container
+            where the final backtest results (stats, plots, etc.) will be
+            rendered.
 
     Returns:
-        None
+        None: This function modifies the Streamlit UI and session state directly.
 
     """
     # for name in session_state_names:
@@ -283,9 +286,7 @@ def start_backtest_process(
     #         ss[name] = session_state_names[name][0]
 
     # Reset the result relatedsession states
-    ss.update(
-        {name: deepcopy(session_state_names[name][0]) for name in session_state_names if session_state_names[name][1]}
-    )
+    reset_ss_values_for_results()
     backtest_infos_container.empty()
     backtest_results_container.empty()
 
@@ -298,16 +299,16 @@ def start_backtest_process(
             st.error(MESSAGES["display_texts"]["messages"]["select_valid_strategy_error"])
             return
 
-    # Placeholders for dynamic messages
-    with col_progress:
-        download_progress_placeholder = st.empty()
-        download_success_placeholder = st.empty()
-    with col_success:
-        run_progress_placeholder = st.empty()
-        run_success_placeholder = st.empty()
-    with col_failed:
-        download_fail_placeholder = st.empty()
-        run_fail_placeholder = st.empty()  # For backtest/optimization success/failure messages
+        # Placeholders for dynamic messages
+        with col_progress:
+            download_progress_placeholder = st.empty()
+            download_success_placeholder = st.empty()
+        with col_success:
+            run_progress_placeholder = st.empty()
+            run_success_placeholder = st.empty()
+        with col_failed:
+            download_fail_placeholder = st.empty()
+            run_fail_placeholder = st.empty()  # For backtest/optimization success/failure messages
 
     benchmark_stats = get_benchmark_data(
         download_progress_placeholder,
@@ -321,7 +322,7 @@ def start_backtest_process(
 
     with backtest_results_container:
         for i, ticker in enumerate(ss.tickers):
-            _process_single_ticker(
+            process_single_ticker(
                 ticker,
                 i,
                 benchmark_stats,
@@ -340,7 +341,7 @@ def start_backtest_process(
     ss.backtest_results_generated = True
 
 
-def _process_single_ticker(
+def process_single_ticker(
     ticker: str,
     i: int,
     benchmark_stats: pd.Series | None,
@@ -356,6 +357,50 @@ def _process_single_ticker(
     failed_runs_tickers: list,
     progress_bar: streamlit_obj,
 ) -> None:
+    """Process a single ticker through the entire backtesting workflow.
+
+    This function orchestrates the download, backtest, and optional Monte Carlo
+    simulation for a single financial instrument (ticker). It manages UI updates
+    for progress, success, and failure messages, and stores all generated
+    results (statistics, plots, trade lists) in the Streamlit session state.
+
+    The workflow includes:
+    1.  Downloading historical data for the ticker.
+    2.  Running the backtest with user-defined strategy and parameters.
+    3.  Comparing the backtest results against a pre-calculated benchmark.
+    4.  If enabled, performing a Monte Carlo simulation on the trade returns.
+    5.  Displaying all relevant results and plots in the Streamlit UI.
+
+    Args:
+        ticker (str): The ticker symbol of the asset to process.
+        i (int): The zero-based index of the current ticker in the list of all tickers,
+            used for progress bar calculation.
+        benchmark_stats (pd.Series | None): The statistics from the benchmark
+            (e.g., Buy & Hold on SPY) backtest. If None, no comparison is made.
+        download_progress_placeholder (streamlit_obj): Streamlit placeholder for
+            displaying data download progress messages.
+        download_success_placeholder (streamlit_obj): Streamlit placeholder for
+            displaying data download success messages.
+        download_fail_placeholder (streamlit_obj): Streamlit placeholder for
+            displaying data download failure messages.
+        run_progress_placeholder (streamlit_obj): Streamlit placeholder for
+            displaying backtest execution progress messages.
+        run_success_placeholder (streamlit_obj): Streamlit placeholder for
+            displaying backtest execution success messages.
+        run_fail_placeholder (streamlit_obj): Streamlit placeholder for
+            displaying backtest execution failure messages.
+        successful_downloads_tickers (list): A list to be updated with tickers
+            that were successfully downloaded.
+        failed_downloads_tickers (list): A list to be updated with tickers
+            for which download failed.
+        successful_runs_tickers (list): A list to be updated with tickers
+            that were successfully backtested.
+        failed_runs_tickers (list): A list to be updated with tickers for which
+            the backtest failed.
+        progress_bar (streamlit_obj): The main Streamlit progress bar to update
+            after processing the ticker.
+
+    """
     download_progress_placeholder.info(
         MESSAGES["display_texts"]["messages"]["downloading_ticker"].format(
             ticker=ticker, current_idx=i + 1, total_tickers=len(ss.tickers)
@@ -420,7 +465,7 @@ def _process_single_ticker(
     ):
         run_montecarlo(
             ticker=ticker,
-            trades=list(ss.backtest_trade_list[ticker]["ReturnPct"]),
+            trades=(ss.backtest_trade_list[ticker]["ReturnPct"]),
             original_stats=ss.bt_stats[ticker],
             initial_capital=ss.initial_capital_wid,
             benchmark=benchmark_stats,
@@ -428,7 +473,7 @@ def _process_single_ticker(
             sim_length=ss.mc_sim_length_wid,
             num_sims=ss.mc_n_sims_wid,
         )
-        if ss.backtest_mc_percentiles[ticker] is not None and ss.backtest_mc_probs_benchmark[ticker] is not None:
+        if ticker in ss.backtest_mc_percentiles and ticker in ss.backtest_mc_probs_benchmark:
             # Grafico 1: Equity Lines Simulate
             show_montecarlo_equity_lines(
                 ticker,
@@ -505,28 +550,4 @@ def _update_run_status(
     successful_runs_tickers.append(ticker)
     run_success_placeholder.success(
         MESSAGES["display_texts"]["messages"]["execution_completed"] + ", ".join(successful_runs_tickers)
-    )
-
-
-def _manage_excel_file_backtest(excel_export_data: dict) -> None:
-    """Manage the export and download of backtest results as an Excel file.
-
-    Args:
-        excel_export_data (dict): Dictionary containing data to export to Excel.
-
-    Returns:
-        None
-
-    """
-    st.markdown("---")
-    st.subheader(MESSAGES["display_texts"]["messages"]["export_results_subheader"])
-    # Generate a timestamped filename
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    excel_filename = f"backtest_results_{timestamp}.xlsx"
-    excel_file = export_to_excel(excel_export_data, filename=excel_filename)
-    st.download_button(
-        label=MESSAGES["display_texts"]["messages"]["download_excel_button"],
-        data=excel_file,
-        file_name=excel_filename,
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
