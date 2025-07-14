@@ -164,6 +164,7 @@ def add_benchmark_comparison(
 
     """
     df_with_benchmark = optimization_heatmap_df.copy()
+    df_with_benchmark = df_with_benchmark.drop("Trade_returns", axis=1)
     df_with_benchmark["Benchmark"] = benchmark_comparison
     df_with_benchmark["Var. [%]"] = (
         100 * (df_with_benchmark[obj_func] - df_with_benchmark["Benchmark"]) / df_with_benchmark["Benchmark"]
