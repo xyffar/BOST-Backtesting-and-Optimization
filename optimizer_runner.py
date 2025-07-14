@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 from backtesting import Backtest
+import sambo
 from sambo.plot import plot_convergence, plot_evaluations, plot_objective
 
 from backtest_runner import get_benchmark_data, run_backtest
