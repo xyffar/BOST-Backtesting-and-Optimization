@@ -269,6 +269,7 @@ def render_strategy_params() -> None:
         ss.bt_params = {}
         return
 
+
     strategy_class = ss.all_strategies[strategy_name]
     param_defs: list[dict] = getattr(strategy_class, "PARAMS_INFO", [])
 

@@ -390,6 +390,7 @@ def run_optimization(data: pd.DataFrame, custom_constraint: Callable, ticker: st
     elif ss.opt_method_wid == "SAMBO" and sambo_data:
         ss.opt_sambo_plots[ticker] = make_sambo_plots(all_comb_data, sambo_data)
 
+
     # 5. Store results in session state
     ss.opt_combs_ranking[ticker] = add_benchmark_comparison(all_comb_data, benchmark_comparison, ss.opt_obj_func_wid)
     ss.trade_returns[ticker] = all_comb_data["Trade_returns"]
@@ -512,6 +513,7 @@ def start_optimization_process(
                 #     wfo_oos_ratio,
                 #     all_comb_data[all_comb_data.columns[:-1]],
                 # )  # Passiamogli la lista delle combinazioni provate
+
 
                 manage_opt_run_infos(
                     run_success_placeholder,

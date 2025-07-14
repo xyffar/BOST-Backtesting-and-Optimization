@@ -51,7 +51,6 @@ session_state_names = {  # The first value indicate the default value when the a
     "opt_sambo_plots": ({}, True),
 }
 
-
 # Default dates (last 5 years until today)
 # Formatted as dd/mm/yyyy
 DEFAULT_START_DATE = dt.datetime(dt.datetime.now().year - 5, 1, 1).strftime("%d/%m/%Y")
