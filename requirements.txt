@@ -18,4 +18,5 @@ yfinance==0.2.63
 # package without version
 # [package]              [import name]
 PyYAML                 # yaml
+joblib
 
