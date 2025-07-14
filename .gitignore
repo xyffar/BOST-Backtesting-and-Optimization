@@ -7,3 +7,6 @@ venv/
 Backups.zip
 Ticker_lists.xlsx
 time_logs.xlsx
+.debug_variables/
+*.bat
+profiles/
