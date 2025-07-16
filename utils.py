@@ -15,6 +15,7 @@ import backtesting
 import numpy as np  # Import numpy for rounding
 import pandas as pd
 import streamlit as st
+from backtesting.backtesting import Strategy
 
 from config import MESSAGES, session_state_names, ss
 from strategies.common_strategy import CommonStrategy  # Importa la strategia base
@@ -87,7 +88,7 @@ def calculate_optimization_combinations(opt_params_ranges: dict[str:Any]) -> int
     return int(total_combinations)
 
 
-@st.cache_resource
+# @st.cache_resource
 def load_strategies() -> dict[str, type[CommonStrategy]]:
     """Find and dynamically load all strategy classes inheriting from CommonStrategy.
 
@@ -96,13 +97,17 @@ def load_strategies() -> dict[str, type[CommonStrategy]]:
     """
     from config import MESSAGES
 
-    strategies: dict[str, type[CommonStrategy]] = {}
-    current_dir: str = (
-        os.path.dirname(__file__) + "/" + MESSAGES["general_settings"]["folder_strategies"]
+    strategies: dict[str, type[CommonStrategy | Strategy]] = {}
+    current_dir: str = os.path.join(
+        os.path.dirname(__file__), MESSAGES["general_settings"]["folder_strategies"]
     )  # Directory corrente del file
 
     for filename in os.listdir(current_dir):
-        if filename.startswith("strategy_") and filename.endswith(".py") and filename != "common_strategy.py":
+        if (
+            filename.startswith("strategy_")
+            and filename.endswith(".py")
+            and filename != MESSAGES.get("general_settings").get("base_strategy_filename")
+        ):
             module_name: str = (
                 MESSAGES["general_settings"]["folder_strategies"] + "." + filename[:-3]
             )  # Rimuovi '.py' e metti la cartella
@@ -114,12 +119,17 @@ def load_strategies() -> dict[str, type[CommonStrategy]]:
                 for name, obj in inspect.getmembers(module):
                     # Controlla se l'oggetto è una classe, non è la classe BaseStrategy stessa,
                     # e se eredita da BaseStrategy.
-                    if inspect.isclass(obj) and obj != CommonStrategy and issubclass(obj, CommonStrategy):
+                    if (
+                        inspect.isclass(obj)
+                        and obj != CommonStrategy
+                        and obj != Strategy
+                        and issubclass(obj, (CommonStrategy, Strategy))
+                    ):
                         if hasattr(obj, "DISPLAY_NAME") and isinstance(obj.DISPLAY_NAME, str):
                             strategies[obj.DISPLAY_NAME] = obj
                         else:
                             print(
-                                f"Avviso: La strategia '{name}' nel modulo '{module_name}' non ha un attributo 'DISPLAY_NAME' valido. Verrà ignorata."
+                                f"Warning: The strategy '{name}' in module '{module_name}' does not have a valid 'DISPLAY_NAME' attribute. It will be ignored."
                             )
             except Exception as e:
                 print(f"Errore durante il caricamento della strategia dal file '{filename}': {e}")

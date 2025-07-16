@@ -12,6 +12,7 @@ general_settings:
     - "1mo"
   sp500_ticker: "SPY" # ETF che traccia l'S&P500
   param_columns_opt_mode: 3
+  base_strategy_filename: "common_strategy.py"
 
 # --- Impostazioni di Ottimizzazione ---
 optimization_settings:

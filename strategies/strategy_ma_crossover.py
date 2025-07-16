@@ -42,9 +42,7 @@ class MACrossoverStrategy(CommonStrategy):
     # Parametri di default specifici per questa strategia (per backtesting.py)
     n1: int = 10
     n2: int = 20
-    ma_type: Literal["SMA", "EMA", "WMA", "RMA"] = (
-        "SMA"  # Tipo di media mobile (SMA, EMA, WMA, RMA)
-    )
+    ma_type: Literal["SMA", "EMA", "WMA", "RMA"] = "SMA"  # Tipo di media mobile (SMA, EMA, WMA, RMA)
 
     # Nome per visualizzazione
     DISPLAY_NAME = "Crossover Medie Mobili"
@@ -114,9 +112,7 @@ class MACrossoverStrategy(CommonStrategy):
             raise ValueError(f"Tipo di media mobile non valido: {self.ma_type}")
 
         # Seleziona la funzione della media mobile in base al tipo
-        ma_func: Callable = getattr(
-            ta, self.ma_type.lower()
-        )  # Usa getattr per ottenere la funzione dinamica
+        ma_func: Callable = getattr(ta, self.ma_type.lower())  # Usa getattr per ottenere la funzione dinamica
 
         # Calcola le medie mobili
         self.ma1 = self.I(ma_func, close_series, self.n1)
