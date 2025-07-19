@@ -6,8 +6,8 @@ import pandas as pd
 # import quantstats as qs
 import streamlit as st
 
-from config import MESSAGES, ss
-from excel_exporter import log_execution_data
+from src.config.config import MESSAGES, ss
+from src.data_handlers.excel_exporter import log_execution_data
 
 
 def _adjust_simulation_length(sampling_method: str, sim_length: int, num_trades: int) -> int:

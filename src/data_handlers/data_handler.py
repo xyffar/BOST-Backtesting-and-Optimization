@@ -3,7 +3,7 @@
 import pandas as pd
 import yfinance as yf
 
-from config import MESSAGES, ss, streamlit_obj
+from src.config.config import MESSAGES, ss, streamlit_obj
 
 
 def download_data(ticker: str, start_date: str, end_date: str, interval: str) -> tuple[pd.DataFrame | None, str, str]:

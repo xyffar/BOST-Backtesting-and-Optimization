@@ -17,7 +17,7 @@ import pandas as pd
 import streamlit as st
 from backtesting.backtesting import Strategy
 
-from config import MESSAGES, session_state_names, ss
+from src.config.config import MESSAGES, session_state_names, ss
 from strategies.common_strategy import CommonStrategy  # Importa la strategia base
 
 # Import necessary for handling Bokeh plots via streamlit-bokeh-events
@@ -95,7 +95,7 @@ def load_strategies() -> dict[str, type[CommonStrategy]]:
     Searches Python files in the same directory starting with 'strategy_'. Returns a dictionary mapping each strategy's DISPLAY_NAME to its class.
 
     """
-    from config import MESSAGES
+    from src.config.config import MESSAGES
 
     strategies: dict[str, type[CommonStrategy | Strategy]] = {}
     current_dir: str = os.path.join(

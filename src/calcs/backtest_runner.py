@@ -8,14 +8,14 @@ import pandas as pd
 import streamlit as st
 from backtesting import Backtest
 
-from config import MESSAGES, ss, streamlit_obj
-from data_handler import download_data, get_sp500_data
-from display_results import show_montecarlo_equity_lines, show_montecarlo_histogram
-from excel_exporter import log_execution_data
-from monte_carlo import run_montecarlo
+from src.calcs.monte_carlo import run_montecarlo
+from src.config.config import MESSAGES, ss, streamlit_obj
+from src.data_handlers.data_handler import download_data, get_sp500_data
+from src.data_handlers.excel_exporter import log_execution_data
+from src.ui_components.display_results import show_montecarlo_equity_lines, show_montecarlo_histogram
+from src.utils.utils import reset_ss_values_for_results
 from strategies.buy_and_hold_strategy import BuyAndHoldStrategy
 from strategies.common_strategy import CommonStrategy
-from utils import reset_ss_values_for_results
 
 
 def compare_with_benchmark(strategy_stats: pd.Series, benchmark_stats: pd.Series | None) -> pd.DataFrame:

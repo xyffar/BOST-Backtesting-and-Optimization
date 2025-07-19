@@ -13,7 +13,7 @@ from openpyxl.utils import (
     get_column_letter,
 )  # Per convertire numeri di colonna in lettere
 
-from config import (
+from src.config.config import (
     HEADER_COLORS,
     HEADER_FONT,  # Import MESSAGES["display_texts"]
     MESSAGES,

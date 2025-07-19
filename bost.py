@@ -1,15 +1,9 @@
 # main.py
 import streamlit as st
 
-from config import MESSAGES, ss
-from profiler import profile_to_file
-from ui import (
-    make_body_backtesting_mode,
-    make_body_optimization_mode,
-    make_sidebar,
-    show_subheader_according_to_mode,
-)
-from utils import initialize_session_states, load_strategies
+from src.config.config import MESSAGES, ss
+from src.utils.profiler import profile_to_file
+from src.utils.utils import initialize_session_states, load_strategies
 
 
 def main_app() -> None:
@@ -37,20 +31,14 @@ def main_app() -> None:
     # Custom CSS for styling UI elements.
     st.markdown(MESSAGES.get("custom_css", ""), unsafe_allow_html=True)
 
-    # Main application title.
-    st.header(MESSAGES.get("display_texts", {}).get("app_title", "BOST"))
+    pages = [
+        st.Page("pages/01_backtest_mode.py", title="Backtest", icon="📊"),
+        st.Page("pages/02_optimization_mode.py", title="Optimization", icon="🎯"),
+    ]
 
-    # Display subheader based on the current mode.
-    show_subheader_according_to_mode()
-
-    # Render the sidebar for user inputs.
-    make_sidebar()
-
-    # Render the main content area based on the selected mode.
-    if ss.mode == "backtest":
-        make_body_backtesting_mode()
-    elif ss.mode == "optimization":
-        make_body_optimization_mode()
+    # Configure navigation with hidden sidebar
+    page = st.navigation(pages)
+    page.run()
 
 
 if __name__ == "__main__":

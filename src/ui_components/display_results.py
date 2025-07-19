@@ -8,8 +8,8 @@ import pandas as pd
 import streamlit as st
 import streamlit_bokeh
 
-from config import MESSAGES, ss
-from excel_exporter import export_to_excel
+from src.config.config import MESSAGES, ss
+from src.data_handlers.excel_exporter import export_to_excel
 
 
 def _manage_excel_file_backtest(excel_export_data: dict) -> None:
