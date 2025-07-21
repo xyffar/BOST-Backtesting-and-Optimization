@@ -1,4 +1,5 @@
-# main.py
+# bost.py
+
 import streamlit as st
 
 from src.config.config import MESSAGES, ss
@@ -14,30 +15,31 @@ def main_app() -> None:
     switches between 'Backtest' and 'Optimization' modes.
     """
     # --- Page and State Initialization ---
-    # Must be the first Streamlit command.
     st.set_page_config(
         page_title=MESSAGES.get("display_texts", {}).get("page_title", "BOST"),
+        page_icon=MESSAGES.get("display_texts", {}).get("page_icon", "📈"),
         layout="wide",
         initial_sidebar_state="expanded",
-        page_icon=MESSAGES.get("display_texts", {}).get("page_icon", "📈"),
     )
 
+    # Initialize session state variables.
     initialize_session_states()
     # Load strategies once and store in session state.
-    if "all_strategies" not in ss or ss.get("all_strategies") == {}:
-        ss.all_strategies = load_strategies()
+    if not ss.get("all_strategies"):
+        ss["all_strategies"] = load_strategies()
 
     # --- UI Rendering ---
     # Custom CSS for styling UI elements.
-    st.markdown(MESSAGES.get("custom_css", ""), unsafe_allow_html=True)
+    st.markdown(MESSAGES.get("custom_css") or "", unsafe_allow_html=True)
 
     pages = [
         st.Page("pages/01_backtest_mode.py", title="Backtest", icon="📊"),
         st.Page("pages/02_optimization_mode.py", title="Optimization", icon="🎯"),
     ]
 
-    # Configure navigation with hidden sidebar
+    # Configure navigation
     page = st.navigation(pages)
+    # Execute the selected page; only one call to page.run() is allowed per rerun.
     page.run()
 
 

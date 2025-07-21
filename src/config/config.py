@@ -10,45 +10,51 @@ from openpyxl.styles import Border, Font, PatternFill, Side
 streamlit_obj = type[st.delta_generator.DeltaGenerator]
 ss = st.session_state
 
-session_state_names = {  # The first value indicate the default value when the app starts. The secondi indicates if it has to reset when a new backtest/optimization starts.
-    "tickers": ([], False),  # List of tickers: list[str]
-    "mode": ("backtest", False),  # Either backtest or optimization: str
-    "all_strategies": ({}, False),  # Dictionary of all found strategies: dict[str, CommonStrategy]
-    "successful_downloads_tickers": ([], True),  # List of correctly downloaded tickers: list[str]
-    "failed_downloads_tickers": ([], True),  # List of failed downloaded tickers: list[str]
-    "successful_runs_tickers": ([], True),  # List of correctly backtested or optimized tickers: list[str]
-    "failed_runs_tickers": ([], True),  # List of failed backtested or optimized tickers: list[str]
-    "bt_params": ({}, False),  # Dictionary of params for backtest: dict[str, int|float|str]
-    "backtest_results_generated": (False, True),  # Bool to indicate the presence of backtest results: bool
-    "bt_stats": ({}, True),  # Dictionary of backtest result statistics: dict[str, pd.Series]
+# The first value indicate the default value when the app starts.
+# The second indicates if it has to reset when a new backtest starts.
+# The third indicates if it has to reset when a new optimization starts.
+session_state_names = {
+    "tickers": ([], False, False),  # List of tickers: list[str]
+    "mode": ("backtest", False, False),  # Either backtest or optimization: str
+    "all_strategies": ({}, False, False),  # Dictionary of all found strategies: dict[str, CommonStrategy]
+    "successful_downloads_tickers": ([], True, True),  # List of correctly downloaded tickers: list[str]
+    "failed_downloads_tickers": ([], True, True),  # List of failed downloaded tickers: list[str]
+    "successful_runs_tickers": ([], True, True),  # List of correctly backtested or optimized tickers: list[str]
+    "failed_runs_tickers": ([], True, True),  # List of failed backtested or optimized tickers: list[str]
+    "bt_params": ({}, False, False),  # Dictionary of params for backtest: dict[str, int|float|str]
+    "backtest_results_generated": (False, True, False),  # Bool to indicate the presence of backtest results: bool
+    "bt_stats": ({}, True, False),  # Dictionary of backtest result statistics: dict[str, pd.Series]
     "backtest_comp_with_benchmark_df": (
         {},
         True,
+        False,
     ),  # Dictionary containing the dataframe of backtest statistics compared with benchmark: dict[str, pd.DataFrame]
     "backtest_interactive_plot": (
         {},
         True,
+        False,
     ),  # Dictionary containing the interactive plots of backtest: dict[str, bokeh_plot]
-    "backtest_trade_list": ({}, True),  # Dictionary of trade lists per ticker: dict[str, list]
-    "mc_pars": (
+    "backtest_trade_list": ({}, True, False),  # Dictionary of trade lists per ticker: dict[str, list]
+    "mc_pars": ({}, True, False),  # Dictionary with MC settings "# Simulations", Length Simulations and Sampling Method
+    "backtest_mc_percentiles": ({}, True, False),
+    "backtest_mc_probs_benchmark": ({}, True, False),
+    "backtest_mc_equity_lines_plot": ({}, True, False),
+    "matrice_equity_lines_simulati": ({}, True, False),  # Helper session state
+    "mc_metrics_data": ({}, True, False),  # Helper session state containing the metrics for all the n_sim simulations
+    "backtest_mc_var_plot": (
         {},
         True,
-    ),  # Dictionary with MC settings "# Simulations", Length Simulations and Sampling Method
-    "backtest_mc_percentiles": ({}, True),
-    "backtest_mc_probs_benchmark": ({}, True),
-    "backtest_mc_equity_lines_plot": ({}, True),
-    "matrice_equity_lines_simulati": ({}, True),  # Helper session state
-    "mc_metrics_data": ({}, True),  # Helper session state containing the metrics for all the n_sim simulations
-    "backtest_mc_var_plot": ({}, True),
-    "backtest_mc_returns_plot": ({}, True),
-    "backtest_excel": ({}, True),
-    "opt_params": ({}, False),  # Dictionary of params for optimization: dict[str : list | range]
-    "opt_results_generated": (False, True),  # Bool to indicate the presence of optimization results: bool
-    "trade_returns": ({}, True),  # List of trade returns for each combination: dict{str: pd.Series[list[float]]}
-    "opt_combs_ranking": ({}, True),
-    "opt_heatmaps": ({}, True),  # Dictionary with heatmaps: doct[str: list[plt.Figure]]
-    "opt_mc_results": ({}, True),
-    "opt_sambo_plots": ({}, True),
+        False,
+    ),  # Dictionary with the VaR histogram for each ticker: dict[str, plt.Figure]
+    "backtest_mc_returns_plot": ({}, True, False),
+    "backtest_excel": ({}, True, False),
+    "opt_params": ({}, False, False),  # Dictionary of params for optimization: dict[str : list | range]
+    "opt_results_generated": (False, False, True),  # Bool to indicate the presence of optimization results: bool
+    "trade_returns": ({}, False, True),  # List of trade returns for each combination: dict{str: pd.Series[list[float]]}
+    "opt_combs_ranking": ({}, False, True),
+    "opt_heatmaps": ({}, False, True),  # Dictionary with heatmaps: doct[str: list[plt.Figure]]
+    "opt_mc_results": ({}, False, True),
+    "opt_sambo_plots": ({}, False, True),
 }
 
 # Default dates (last 5 years until today)

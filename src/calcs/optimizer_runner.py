@@ -10,22 +10,21 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 from backtesting import Backtest
-import sambo
 from sambo.plot import plot_convergence, plot_evaluations, plot_objective
 
 from src.calcs.backtest_runner import get_benchmark_data, run_backtest
+from src.calcs.monte_carlo import run_montecarlos_for_best_combs
 from src.config.config import MESSAGES, ss, streamlit_obj
 from src.data_handlers.data_handler import get_ticker_data_and_infos
 from src.data_handlers.excel_exporter import log_execution_data
-from src.calcs.monte_carlo import run_montecarlos_for_best_combs
-from strategies.common_strategy import CommonStrategy
 from src.utils.utils import (
     OptimizationRecorder,
     add_benchmark_comparison,
     list_varying_params,
     record_all_optimizations,
-    reset_ss_values_for_results,
+    reset_ss_values_for_optimization_results,
 )
+from strategies.common_strategy import CommonStrategy
 
 # Alias di tipo per maggiore chiarezza e leggibilità
 OptimizationParamsRanges = dict[str, range | tuple[float, float, float] | list[Any]]
@@ -444,14 +443,14 @@ def start_optimization_process(
 
     """
     if ss.opt_results_generated:
-        reset_ss_values_for_results()
+        reset_ss_values_for_optimization_results()
         _reset_info_res_containers(opt_infos_container, opt_results_container)
         return
 
     if check_incorrect_arguments_opt():
         return
 
-    reset_ss_values_for_results()
+    reset_ss_values_for_optimization_results()
 
     _reset_info_res_containers(opt_infos_container, opt_results_container)
 

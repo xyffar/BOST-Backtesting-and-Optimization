@@ -10,3 +10,5 @@ time_logs.xlsx
 .debug_variables/
 *.bat
 profiles/
+assets/
+outputs/

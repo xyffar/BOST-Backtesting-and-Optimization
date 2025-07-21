@@ -99,8 +99,8 @@ def load_strategies() -> dict[str, type[CommonStrategy]]:
 
     strategies: dict[str, type[CommonStrategy | Strategy]] = {}
     current_dir: str = os.path.join(
-        os.path.dirname(__file__), MESSAGES["general_settings"]["folder_strategies"]
-    )  # Directory corrente del file
+        os.path.dirname(os.path.dirname(os.path.dirname(__file__))), MESSAGES["general_settings"]["folder_strategies"]
+    )
 
     for filename in os.listdir(current_dir):
         if (
@@ -369,7 +369,7 @@ def initialize_session_states() -> None:
     _update_session_state_from_config(lambda name, config: name not in ss)
 
 
-def reset_ss_values_for_results() -> None:
+def reset_ss_values_for_backtest_results() -> None:
     """Reset all session state variables that hold results from a previous run.
 
     Iterates through the `session_state_names` configuration and resets any
@@ -378,6 +378,17 @@ def reset_ss_values_for_results() -> None:
     """
     # Update if the `is_result` flag (config[1]) is True.
     _update_session_state_from_config(lambda name, config: config[1])
+
+
+def reset_ss_values_for_optimization_results() -> None:
+    """Reset all session state variables that hold results from a previous run.
+
+    Iterates through the `session_state_names` configuration and resets any
+    state variable where the `is_result` flag is True. This is used to clear
+    old data before a new backtest or optimization run.
+    """
+    # Update if the `is_result` flag (config[1]) is True.
+    _update_session_state_from_config(lambda name, config: config[2])
 
 
 def _get_opt_button_label() -> str:

@@ -140,7 +140,7 @@ def make_body_backtesting_mode() -> None:
     # start_backtest_process callback. It's also used to display
     # results from previous runs if they exist in the session state.
     with results_container:
-        display_results()
+        display_results(mode="backtest")
 
 
 def _render_param_widget(param_def: dict) -> any:
@@ -176,7 +176,7 @@ def _render_param_widget(param_def: dict) -> any:
             f"{display_name}", param_def["options"], index=param_def["options"].index(default_value), key=key
         )
 
-    if param_type is int:
+    if isinstance(param_type, int):
         return st.number_input(
             f"{display_name}",
             min_value=param_def["lowest"],
@@ -186,7 +186,7 @@ def _render_param_widget(param_def: dict) -> any:
             key=key,
         )
 
-    if param_type is float:
+    if isinstance(param_type, float):
         is_percentage = param_name in ["sl_percent", "tp_percent"]
         multiplier = 100.0 if is_percentage else 1.0
 

@@ -13,7 +13,7 @@ from src.config.config import MESSAGES, ss, streamlit_obj
 from src.data_handlers.data_handler import download_data, get_sp500_data
 from src.data_handlers.excel_exporter import log_execution_data
 from src.ui_components.display_results import show_montecarlo_equity_lines, show_montecarlo_histogram
-from src.utils.utils import reset_ss_values_for_results
+from src.utils.utils import reset_ss_values_for_backtest_results
 from strategies.buy_and_hold_strategy import BuyAndHoldStrategy
 from strategies.common_strategy import CommonStrategy
 
@@ -281,12 +281,7 @@ def start_backtest_process(
         None: This function modifies the Streamlit UI and session state directly.
 
     """
-    # for name in session_state_names:
-    #     if session_state_names[name][1]:
-    #         ss[name] = session_state_names[name][0]
-
-    # Reset the result relatedsession states
-    reset_ss_values_for_results()
+    reset_ss_values_for_backtest_results()
     backtest_infos_container.empty()
     backtest_results_container.empty()
 

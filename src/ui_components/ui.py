@@ -1,5 +1,3 @@
-# from typing import type
-
 import streamlit as st
 
 from src.config.config import (
@@ -9,9 +7,7 @@ from src.config.config import (
     MIN_DATE,
     ss,
 )
-from src.utils.utils import (
-    parse_date,
-)
+from src.utils.utils import parse_date
 
 
 def _render_asset_and_account_inputs() -> None:

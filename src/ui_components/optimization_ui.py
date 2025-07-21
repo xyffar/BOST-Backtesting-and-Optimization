@@ -357,7 +357,7 @@ def make_body_optimization_mode() -> None:
         render_opt_button_and_pars_combs([infos_container, results_container])
 
     with results_container:
-        display_results()
+        display_results(mode="optimization")
 
 
 def _render_numeric_range_inputs(

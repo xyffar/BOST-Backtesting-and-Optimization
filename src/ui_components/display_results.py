@@ -26,7 +26,7 @@ def _manage_excel_file_backtest(excel_export_data: dict) -> None:
     st.subheader(MESSAGES["display_texts"]["messages"]["export_results_subheader"])
     # Generate a timestamped filename
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    excel_filename = f"backtest_results_{timestamp}.xlsx"
+    excel_filename = f"{MESSAGES['general_settings']['folder_output_files']}/backtest_results_{timestamp}.xlsx"
     excel_file = export_to_excel(excel_export_data, filename=excel_filename)
     st.download_button(
         label=MESSAGES["display_texts"]["messages"]["download_excel_button"],
@@ -36,7 +36,7 @@ def _manage_excel_file_backtest(excel_export_data: dict) -> None:
     )
 
 
-def display_results() -> None:
+def display_results(mode: str = "backtest") -> None:
     """Display backtest or optimization results in the Streamlit UI.
 
     Act as the main rendering entry point after a backtest or optimization run
@@ -58,32 +58,36 @@ def display_results() -> None:
         Renders content to the Streamlit UI, including tabs, dataframes, and plots.
 
     """
-    if (ss.mode == "backtest" and not ss.backtest_results_generated) or (
-        ss.mode == "optimization" and not ss.opt_results_generated
+    if (mode == "backtest" and not ss.backtest_results_generated) or (
+        mode == "optimization" and not ss.opt_results_generated
     ):
         # st.warning(MESSAGES["display_texts"]["messages"]["no_results_to_show"])
         return
 
-    tickers_with_results = tuple((*ss.bt_stats.keys(), *ss.opt_combs_ranking.keys()))
-
+    tickers_with_results = (
+        tuple(ss.bt_stats.keys())
+        if mode == "backtest"
+        else (tuple(ss.opt_combs_ranking.keys()) if mode == "optimization" else "")
+    )
     tabs = st.tabs(tickers_with_results)
 
     for i, ticker in enumerate(tickers_with_results):
         with tabs[i]:
             st.markdown(f"""### {MESSAGES["display_texts"]["messages"]["results_for_ticker"].format(ticker=ticker)}""")
 
-            if ss.mode == "optimization":
+            if mode == "optimization":
                 _display_optimization_results(
                     ticker
                     # ticker_results[ticker],
                     # benchmark_comparison,
                     # obj_func,
                 )
-            elif ss.mode == "backtest":
+            elif mode == "backtest":
                 _display_backtest_results(ticker)
             else:
                 st.error("The mode is neither backtesting or optimization!")
-    if ss.backtest_results_generated:
+
+    if ss.backtest_results_generated and mode == "backtest":
         _manage_excel_file_backtest(
             {
                 key: (ss.backtest_trade_list.get(key), ss.backtest_comp_with_benchmark_df.get(key))
@@ -95,11 +99,6 @@ def display_results() -> None:
 def _display_optimization_results(
     ticker: str,
 ) -> None:
-    # (all_comb_data, heatmap_plots, sambo_plots, mc_data) = ticker_result
-
-    # if all_comb_data is None:
-    #     return
-
     show_results_all_combs_with_benchmark(ticker)
 
     if ticker in ss.opt_heatmaps:
