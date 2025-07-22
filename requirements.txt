@@ -9,7 +9,7 @@ numpy==1.26.0
 openpyxl==3.1.5        
 pandas-ta==0.3.14b0    # pandas_ta
 pandas==2.3.0          
-sambo==1.25.1          
+sambo[all]==1.25.1          
 streamlit-bokeh==3.7.2 # streamlit_bokeh
 streamlit==1.46.1      
 xlsxwriter==3.2.5      
