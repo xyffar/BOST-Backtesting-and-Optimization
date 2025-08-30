@@ -1,11 +1,11 @@
 # strategies/strategy_rsi.py
 
-from typing import Any, Callable, Dict, List, Optional  # Added List, Dict
+from collections.abc import Callable  # Added List, Dict
+from typing import Any, ClassVar
 
 import numpy as np
 import pandas as pd
 import pandas_ta as ta
-from backtesting import Strategy
 from backtesting.lib import crossover, resample_apply
 
 from strategies.common_strategy import CommonStrategy  # Importa la strategia base
@@ -13,6 +13,7 @@ from strategies.common_strategy import CommonStrategy  # Importa la strategia ba
 
 # La strategia basata sull'RSI
 class RsiMultiTimeframeStrategy(CommonStrategy):
+    """A multi-timeframe RSI strategy that uses a higher timeframe to filter trades."""
     # Parametri specifici per questa strategia
     rsi_p_low_timeframe: int = 14  # Periodo RSI per il timeframe di base
     rsi_p_high_timeframe: int = 21  # Periodo RSI per il timeframe superiore
@@ -28,11 +29,9 @@ class RsiMultiTimeframeStrategy(CommonStrategy):
     # Nome per visualizzazione
     DISPLAY_NAME = "RSI Multi Timeframe"
     # Vincolo di ottimizzazione: oversold_level deve essere minore di overbought_level
-    optimization_constraint: Optional[Callable[[pd.Series], bool]] = (
-        lambda s: s.oversold_level < s.overbought_level
-    )
+    optimization_constraint: Callable[[pd.Series], bool] | None = lambda s: s.oversold_level < s.overbought_level
     # Definizione dei parametri per la UI e l'ottimizzazione
-    PARAMS_INFO: List[Dict[str, Any]] = [
+    PARAMS_INFO: ClassVar[list[dict[str, Any]]] = [
         {
             "name": "rsi_p_low_timeframe",
             "type": int,
@@ -91,7 +90,7 @@ class RsiMultiTimeframeStrategy(CommonStrategy):
         },
         # SL/TP parameters
         {
-            "name": "sl_percent",
+            "name": "sl_pct",
             "type": float,
             "default": 0.05,
             "lowest": 0.00,
@@ -101,7 +100,7 @@ class RsiMultiTimeframeStrategy(CommonStrategy):
             "step": 0.005,
         },
         {
-            "name": "tp_percent",
+            "name": "tp_pct",
             "type": float,
             "default": 0.00,
             "lowest": 0.00,
@@ -113,14 +112,10 @@ class RsiMultiTimeframeStrategy(CommonStrategy):
     ]
 
     def init(self) -> None:
-        """
-        Inizializza la strategia calcolando l'RSI.
-        """
-        CloseSeries: pd.Series = pd.Series(self.data.Close)
-        self.rsi_base_t = self.I(ta.rsi, CloseSeries, self.rsi_p_low_timeframe)
-        self.rsi_sup_t = resample_apply(
-            "W-FRI", ta.rsi, self.data.Close, self.rsi_p_high_timeframe
-        )
+        """Initialize the strategy by calculating the RSI on two timeframes."""
+        close_series: pd.Series = pd.Series(self.data.Close)
+        self.rsi_base_t = self.I(ta.rsi, close_series, self.rsi_p_low_timeframe)
+        self.rsi_sup_t = resample_apply("W-FRI", ta.rsi, self.data.Close, self.rsi_p_high_timeframe)
         match self.when_to_buy:
             case "Oversold":
                 self.crossover_with_oversold = True
@@ -130,9 +125,7 @@ class RsiMultiTimeframeStrategy(CommonStrategy):
                 raise ValueError("Value is different from Oversold or Overbought!!")
 
     def next(self) -> None:
-        """
-        Viene chiamato ad ogni nuova barra di dati. Implementa la logica di trading.
-        """
+        """Implement the trading logic based on the multi-timeframe RSI signals."""
         # Controlla se ci sono abbastanza dati per entrambi gli indicatori
         # e che i valori RSI non siano NaN (TA-Lib produce NaN per le prime barre)
         if np.isnan(self.rsi_base_t[-1]) or np.isnan(self.rsi_sup_t[-1]):
@@ -153,11 +146,7 @@ class RsiMultiTimeframeStrategy(CommonStrategy):
         if (
             crossover(
                 self.rsi_base_t,
-                (
-                    self.oversold_level
-                    if self.crossover_with_oversold
-                    else self.overbought_level
-                ),
+                (self.oversold_level if self.crossover_with_oversold else self.overbought_level),
             )
             and trend_bullish
             and not self.position
@@ -170,11 +159,7 @@ class RsiMultiTimeframeStrategy(CommonStrategy):
         # 3. Abbiamo una posizione long aperta
         elif (
             crossover(
-                (
-                    self.overbought_level
-                    if self.crossover_with_oversold
-                    else self.oversold_level
-                ),
+                (self.overbought_level if self.crossover_with_oversold else self.oversold_level),
                 self.rsi_base_t,
             )
             and trend_bearish

@@ -1,29 +1,36 @@
 # strategies/strategy_bollinger_bands.py
 
-from typing import Any, Callable, Dict, List, Optional  # Added List, Dict
+from collections.abc import Callable
+from typing import Any, ClassVar
 
 import pandas as pd
 import pandas_ta as ta
-from backtesting import Strategy
 
-from strategies.common_strategy import CommonStrategy  # Importa la strategia base
+from strategies.common_strategy import CommonStrategy
 
 
-# La strategia basata sulle Bande di Bollinger
 class BollingerBandsStrategy(CommonStrategy):
-    # Parametri di default specifici per questa strategia
+    """Strategy based on Bollinger Bands.
+
+    Bollinger Bands are a volatility indicator that plots two standard deviations
+    above and below a moving average (MA) of prices. They are used to identify
+    potential price movements and to anticipate potential breakouts.
+
+    This strategy buys when the closing price crosses below the lower Bollinger Band
+    and sells when the closing price crosses above the upper Bollinger Band.
+    """
+
+    # Parameters specific to this strategy
     bb_period: int = 20
     bb_dev: float = 2.0
 
-    # Nome per visualizzazione
+    # Name for display
     DISPLAY_NAME = "Bollinger's Bands"
 
-    optimization_constraint: Optional[Callable[[pd.Series], bool]] = (
-        None  # No specific constraint for this strategy
-    )
+    optimization_constraint: Callable[[pd.Series], bool] | None = None  # No specific constraint for this strategy
 
-    # Definizione dei parametri per la UI e l'ottimizzazione
-    PARAMS_INFO: List[Dict[str, Any]] = [
+    # Definition of parameters for the UI and optimization
+    PARAMS_INFO: ClassVar[list[dict[str, Any]]] = [
         {
             "name": "bb_period",
             "type": int,
@@ -46,7 +53,7 @@ class BollingerBandsStrategy(CommonStrategy):
         },
         # SL/TP parameters
         {
-            "name": "sl_percent",
+            "name": "sl_pct",
             "type": float,
             "default": 0.05,
             "lowest": 0.00,
@@ -56,7 +63,7 @@ class BollingerBandsStrategy(CommonStrategy):
             "step": 0.005,
         },
         {
-            "name": "tp_percent",
+            "name": "tp_pct",
             "type": float,
             "default": 0.00,
             "lowest": 0.00,
@@ -68,13 +75,9 @@ class BollingerBandsStrategy(CommonStrategy):
     ]
 
     def init(self) -> None:
-        """
-        Inizializza la strategia calcolando le Bande di Bollinger.
-        """
-        CloseSeries: pd.Series = pd.Series(self.data.Close)
-        # Calcola le Bande di Bollinger usando pandas_ta
-        # bb_df contiene Lower Band, Middle Band, Upper Band (di solito 'BBL', 'BBM', 'BBU')
-        # pandas_ta restituisce un DataFrame con colonne nominate, es. BBL_20_2.0, BBM_20_2.0, BBU_20_2.0
+        """Initialize the strategy by calculating Bollinger Bands."""
+        close_series: pd.Series = pd.Series(self.data.Close)
+        # Calculate Bollinger Bands using pandas_ta
         (
             self.bb_lower,
             self.bb_middle,
@@ -83,40 +86,27 @@ class BollingerBandsStrategy(CommonStrategy):
             self.bb_percent,
         ) = self.I(
             ta.bbands,
-            CloseSeries,
+            close_series,
             length=self.bb_period,
             std=self.bb_dev,
-            append=False,  # Non appendere al dataframe originale, backtesting.py lo gestisce
+            append=False,  # Do not append to the original dataframe, backtesting.py handles it
         )
 
     def next(self) -> None:
-        """
-        Implementa la logica di trading per le Bande di Bollinger.
-        Permette solo posizioni LONG.
-        """
-        # Segnale di acquisto: Il prezzo di chiusura attraversa al di sotto la banda inferiore dal tick precedente.
-        # Condizione semplificata: Close attraversa da sotto la banda inferiore
-        buy_signal: bool = (
-            self.data.Close[-1] > self.bb_lower[-1]
-            and self.data.Close[-2] <= self.bb_lower[-2]
+        """Logic to buy and sell based on Bollinger Bands signals."""
+        # Buy signal: Close price crosses below the lower Bollinger Band from the previous tick.
+        buy_signal = self.data.Close[-1] > self.bb_lower[-1] and self.data.Close[-2] <= self.bb_lower[-2]
+
+        # Sell signal: Close price crosses above the upper Bollinger Band or closes above the middle Bollinger Band after being above.
+        close_signal = (self.data.Close[-1] < self.bb_upper[-1] and self.data.Close[-2] >= self.bb_upper[-2]) or (
+            self.data.Close[-1] < self.bb_middle[-1] and self.data.Close[-2] >= self.bb_middle[-2]
         )
 
-        # Segnale di chiusura/ribassista: Il prezzo di chiusura attraversa al di sopra la banda superiore
-        # o chiude al di sotto della banda centrale dopo essere stato sopra.
-        close_signal: bool = (
-            self.data.Close[-1] < self.bb_upper[-1]
-            and self.data.Close[-2] >= self.bb_upper[-2]
-        ) or (
-            self.data.Close[-1] < self.bb_middle[-1]
-            and self.data.Close[-2] >= self.bb_middle[-2]
-        )
+        # Trading logic:
+        # If there is no open position and there is a buy signal, open a long position.
+        if not self.position and buy_signal:
+            self._buy_long()
 
-        # Logica di entrata:
-        # Se non c'è una posizione aperta e c'è un segnale di acquisto, apri una posizione LONG.
-        if not self.position:
-            if buy_signal:
-                self._buy_long()  # Usa il metodo helper dalla classe base
-        # Logica di uscita:
-        # Se c'è una posizione aperta e c'è un segnale di chiusura, chiudi la posizione.
-        elif close_signal:
-            self._close_position()  # Usa il metodo helper dalla classe base
+        # If there is an open position and there is a close signal, close the position.
+        elif self.position and close_signal:
+            self._close_position()

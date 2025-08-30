@@ -8,14 +8,17 @@ import backtesting
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import scipy
 import streamlit as st
-from backtesting import Backtest
+from backtesting import Backtest, Strategy
+from matplotlib.figure import Figure
+from sambo import OptimizeResult
 from sambo.plot import plot_convergence, plot_evaluations, plot_objective
 
-from src.calcs.backtest_runner import get_benchmark_data, run_backtest
-from src.calcs.monte_carlo import run_montecarlos_for_best_combs
+from src.calcs.backtest_runner import BenchmarkBacktestError, get_benchmark_data
+from src.calcs.monte_carlo import get_montecarlo_stats
 from src.config.config import MESSAGES, ss, streamlit_obj
-from src.data_handlers.data_handler import get_ticker_data_and_infos
+from src.data_handlers.data_handler import DownloadedDataError, MissingColumnError, get_ticker_data_and_infos
 from src.data_handlers.excel_exporter import log_execution_data
 from src.utils.utils import (
     OptimizationRecorder,
@@ -144,11 +147,12 @@ def _execute_optimization(
         )
         return None
 
+    obj_func = ss.get("opt_obj_func_wid", "Return [%]")
     try:
         with record_all_optimizations(bt) as recorder:
             result = bt.optimize(
                 **processed_params_ranges,
-                maximize=ss.get("opt_obj_func_wid"),
+                maximize=obj_func,
                 method=method_arg,
                 constraint=constraint_func,
                 random_state=None,
@@ -158,10 +162,12 @@ def _execute_optimization(
             )
 
             # Safely extract SAMBO data if the method returned it
-            sambo_data = result[1] if method_arg == "sambo" and isinstance(result, tuple) else None
+            sambo_data: scipy.optimize.OptimizeResult = (
+                result[1] if method_arg == "sambo" and isinstance(result, tuple) else None
+            )
 
             # Process the recorded results
-            all_results_df = _manipulate_opt_results(processed_params_ranges, recorder, ss.get("opt_obj_func_wid"))
+            all_results_df = _manipulate_opt_results(recorder, obj_func)
 
             if all_results_df is None or all_results_df.empty:
                 return None
@@ -173,7 +179,7 @@ def _execute_optimization(
 
 
 def _manipulate_opt_results(
-    processed_params_ranges: dict[str, list[Any]],
+    # processed_params_ranges: dict[str, list[Any]],
     recorder: OptimizationRecorder,
     objective_func: str,
 ) -> pd.DataFrame | None:
@@ -193,7 +199,10 @@ def _manipulate_opt_results(
                               or None if no valid results were found.
 
     """
+    # Step 1: Retrieve the raw optimization results from the recorder
     all_results = recorder.get_dataframe()
+
+    # Check if the results are empty or None
     if all_results is None or all_results.empty:
         st.error(
             MESSAGES.get("display_texts", {})
@@ -202,30 +211,64 @@ def _manipulate_opt_results(
         )
         return None
 
-    # Set the parameter columns as the index
-    param_cols = [col for col in processed_params_ranges if col in all_results.columns]
-    all_results = all_results.set_index(param_cols)
-
-    # Select only the objective metrics and the trades column
-    objective_cols = list(MESSAGES.get("optimization_settings", {}).get("objectives", {}).keys())
-    all_results = all_results[[*objective_cols, "_trades"]]
-
-    # Extract the list of trade returns from the nested DataFrame
-    all_results["_trades"] = all_results["_trades"].apply(
+    # Step 2: Extract trade returns from the raw results
+    all_results["_trades"] = all_results["_trades"].map(
         lambda nested_df: (
             nested_df["ReturnPct"].to_numpy()
             if isinstance(nested_df, pd.DataFrame) and "ReturnPct" in nested_df.columns
             else np.nan
         )
     )
-    all_results.rename(columns={"_trades": "Trade_returns"}, inplace=True)
 
-    # Remove duplicate parameter combinations, keeping the first result
-    all_results = all_results.loc[~all_results.index.duplicated(keep="first")]
+    # Step 3: Extract equity curve data from the raw results
+    all_results["_equity_curve"] = all_results["_equity_curve"].map(
+        lambda nested_df: pd.DataFrame(nested_df["Equity"].pct_change() + 1)
+        if isinstance(nested_df, pd.DataFrame) and "Equity" in nested_df.columns
+        else np.nan
+    )
 
-    # Sort by the objective function
+    # Step 4: Rename columns for better readability
+    all_results.rename(columns={"_trades": "Trade_returns", "_equity_curve": "Equity_curve"}, inplace=True)
+
+    # Step 5: Set "BT Stats" as the first level of the MultiIndex columns for the base stats
+    all_available_stats: list = [stat["name"] for stat in MESSAGES["all_stats_properties"]]
+    all_results.columns = pd.MultiIndex.from_tuples(
+        [
+            ("BT Stats", col) if col in [*all_available_stats, "Trade_returns", "Equity_curve"] else ("", col)
+            for col in all_results.columns
+        ]
+    )
+
+    # Step 6: Add strategy information to the results
+    all_results[("Strategy", "Strat Name")] = all_results[("", "_strategy")].map(
+        lambda x: getattr(x, "DISPLAY_NAME", x.__class__.__name__)
+        if isinstance(x, (CommonStrategy, Strategy))
+        else "Unknown Strategy"
+    )
+    all_results[("Strategy", "Param Names")] = all_results[("", "_strategy")].map(
+        lambda x: tuple(x._params.keys()) if isinstance(x, (CommonStrategy, Strategy)) else ()
+    )
+    all_results[("Strategy", "Param Values")] = all_results[("", "_strategy")].map(
+        lambda x: tuple(x._params.values()) if isinstance(x, (CommonStrategy, Strategy)) else ()
+    )
+
+    # Step 7: Remove unneeded columns
+    all_results = all_results.drop(columns=[col for col in all_results.columns if col[0] == ""])
+
+    # Step 8: Remove duplicate parameter combinations (based on strat related fields), keeping the first result
+    all_results = all_results[
+        ~all_results[[c for c in all_results.columns if c[0] == "Strategy"]].duplicated(keep="first")
+    ]
+
+    # Step 9: Add the objective function as an attribute for easy access
+    all_results.attrs["objective_func"] = objective_func
+
+    # Step 10: Sort the results by the objective function
     is_higher_better = MESSAGES.get("optimization_settings", {}).get("objectives", {}).get(objective_func, True)
-    return all_results.sort_values(by=objective_func, ascending=not is_higher_better)
+
+    return all_results.sort_values(by=("BT Stats", objective_func), ascending=not is_higher_better).reset_index(
+        drop=True
+    )
 
 
 def get_constraint(strategy_class: backtesting.Strategy, custom_constraint: Callable | None) -> Callable | None:
@@ -249,7 +292,7 @@ def _plot_single_heatmap(
     param1_col: str,
     param2_col: str,
     objective_display_name: str,
-) -> plt.Figure | None:
+) -> Figure | None:
     """Generate a single heatmap plot for two specific parameters.
 
     Aggregates objective values by taking the mean for duplicate combinations.
@@ -273,8 +316,8 @@ def _plot_single_heatmap(
         x_labels = [round(val, 2) if isinstance(val, float) else val for val in heatmap_pivot.columns]
         y_labels = [round(val, 2) if isinstance(val, float) else val for val in heatmap_pivot.index]
 
-        ax.set_xticklabels(x_labels)
-        ax.set_yticklabels(y_labels)
+        ax.set_xticklabels([str(label) for label in x_labels])
+        ax.set_yticklabels([str(label) for label in y_labels])
 
         ax.set_xlabel(param2_col)
         ax.set_ylabel(param1_col)
@@ -293,7 +336,7 @@ def _plot_single_heatmap(
         return None
 
 
-def _plot_single_line_chart(results_df: pd.DataFrame, param_col: str, objective_display_name: str) -> plt.Figure | None:
+def _plot_single_line_chart(results_df: pd.DataFrame, param_col: str, objective_display_name: str) -> Figure | None:
     """Generate a line chart for a single parameter."""
     try:
         # Dimensioni ulteriormente ridotte per permettere circa 4 grafici per riga
@@ -334,11 +377,15 @@ def _generate_plots_for_grid_search_results(results_df: pd.DataFrame, objective_
 
     """
     # Prepare a DataFrame with only the objective and parameter columns
-    plot_df = results_df[objective_display_name].reset_index()
+    # plot_df = results_df[objective_display_name].reset_index()
+    plot_df = pd.DataFrame(
+        results_df[("Strategy", "Param Values")].tolist(), columns=results_df[("Strategy", "Param Names")].iloc[0]
+    )
+    plot_df[objective_display_name] = results_df[("BT Stats", "Return [%]")]
 
     # Identify which parameters have more than one unique value
-    varying_params: list[tuple[int, str]] = list_varying_params(plot_df.drop(columns=objective_display_name))
-    generated_plots: list[plt.Figure] = []
+    varying_params: list[tuple[int, str]] = list_varying_params(results_df)
+    generated_plots: list[Figure] = []
 
     if len(varying_params) == 1:
         param_name = varying_params[0][1]
@@ -361,7 +408,9 @@ def _generate_plots_for_grid_search_results(results_df: pd.DataFrame, objective_
     ss.opt_heatmaps[ticker] = generated_plots
 
 
-def run_optimization(data: pd.DataFrame, custom_constraint: Callable, ticker: str, benchmark_comparison: float) -> None:
+def run_optimization(
+    data: pd.DataFrame, custom_constraint: Callable | None, ticker: str, benchmark_comparison: pd.Series
+) -> None:
     """Run the full optimization workflow for a single ticker."""
     if data is None or data.empty:
         st.error(MESSAGES.get("display_texts", {}).get("optimizer_runner", {}).get("no_data_for_optimization", ""))
@@ -391,10 +440,17 @@ def run_optimization(data: pd.DataFrame, custom_constraint: Callable, ticker: st
         ss.opt_sambo_plots[ticker] = make_sambo_plots(all_comb_data, sambo_data)
 
     # 5. Store results in session state
-    ss.opt_combs_ranking[ticker] = add_benchmark_comparison(all_comb_data, benchmark_comparison, ss.opt_obj_func_wid)
-    ss.trade_returns[ticker] = all_comb_data["Trade_returns"]
+    ss.opt_master_results_table[ticker] = add_benchmark_comparison(
+        all_comb_data,
+        benchmark_comparison,
+    )
 
-    # 6. Log execution time
+    # 6. Convert timedelta columns to days (float) for better readability
+    ss.opt_master_results_table[ticker] = ss.opt_master_results_table[ticker].apply(
+        lambda col: col.dt.total_seconds() / (24 * 60 * 60) if pd.api.types.is_timedelta64_dtype(col) else col
+    )
+
+    # 7. Log execution time
     end_time = time.perf_counter()
     pars_time_log = {
         "n_combs": len(all_comb_data),
@@ -409,38 +465,30 @@ def start_optimization_process(
     opt_infos_container: streamlit_obj,
     opt_results_container: streamlit_obj,
 ) -> None:
-    """Initiate and manage the full optimization process.
+    """Utilities to run strategy optimization workflows and related visualizations.
 
-    Orchestrate the entire optimization workflow. This function first checks if
-    the user intends to clear previous results. If so, it resets relevant
-    session state variables and clears UI containers. Otherwise, it performs
-    input validation, fetches benchmark data, and iterates through each
-    user-selected ticker. For each ticker, it downloads data, runs the
-    optimization with the specified strategy and parameters, and optionally
-    performs a Monte Carlo simulation on the best combinations.
-    It displays progress in the UI throughout the process.
+    This module orchestrates parameter optimization for backtesting.py strategies,
+    supporting Grid Search and SAMBO methods. It prepares parameter grids from UI
+    inputs, executes optimizations while recording all runs, cleans and ranks
+    results, compares them against a benchmark, and optionally enriches outputs
+    with Monte Carlo statistics. It also generates plots (line charts, heatmaps,
+    and SAMBO diagnostics) and provides helpers for Streamlit UI messaging and
+    lifecycle management.
 
-    All inputs for the optimization (tickers, strategy, parameters, etc.) are
-    retrieved from the Streamlit session state (`ss`).
+    Key components:
+    - _initialize_bt_instance: Build a Backtest from session settings.
+    - _process_params_ranges: Normalize UI ranges to discrete test values.
+    - _execute_optimization: Run optimizer with constraints and record results.
+    - _manipulate_opt_results: Extract, deduplicate, and sort optimization stats.
+    - Plot helpers for single- and multi-parameter results, and SAMBO plots.
+    - start_optimization_process / run_optimization: End-to-end workflow per ticker,
+    including data download, benchmark retrieval, plotting, MC, and logging.
+    - WalkForwardOptimizer: Prototype for WFO windowing, evaluation, and summaries.
 
-    Args:
-        opt_infos_container (streamlit_obj): The Streamlit container
-            designated for displaying informational messages, such as download
-            and run progress.
-        opt_results_container (streamlit_obj): The Streamlit container
-            where the final optimization results (stats, plots, etc.) will be
-            rendered.
-
-    Returns:
-        None: This function modifies the Streamlit UI and session state directly.
-
-    Side Effects:
-        - Resets session state variables related to optimization results if clearing.
-        - Populates `ss.opt_combs_ranking` with ranked optimization results.
-        - Populates `ss.opt_heatmaps` or `ss.opt_sambo_plots` with generated plots.
-        - Populates `ss.opt_mc_results` with Monte Carlo simulation results if enabled.
-        - Updates Streamlit UI placeholders with progress, success, and error messages.
-
+    Side effects:
+    - Writes plots and tables to Streamlit session state (e.g., ss.opt_master_results_table,
+    ss.opt_heatmaps, ss.opt_sambo_plots) and UI placeholders.
+    - Logs execution timing to Excel via log_execution_data.
     """
     if ss.opt_results_generated:
         reset_ss_values_for_optimization_results()
@@ -463,25 +511,39 @@ def start_optimization_process(
         run_fail_placeholder,
     ) = create_info_placeholders(opt_infos_container)  # For backtest/optimization success/failure messages
 
-    benchmark_stats: backtesting._stats._Stats = get_benchmark_data(
-        download_progress_placeholder,
-        download_success_placeholder,
-        ss.successful_downloads_tickers,
-        ss.failed_downloads_tickers,
-    )
-    benchmark_comparison: float = benchmark_stats[ss.opt_obj_func_wid]
+    try:
+        benchmark_stats: pd.Series = get_benchmark_data(
+            start_date=ss.start_date_wid,
+            end_date=ss.end_date_wid,
+            interval=ss.data_interval_wid,
+            initial_capital=ss.initial_capital_wid,
+            commission_percent=ss.commission_percent_wid / 100,
+            download_progress_placeholder=download_progress_placeholder,
+            download_success_placeholder=download_success_placeholder,
+            successful_downloads_tickers=ss.successful_downloads_tickers,
+            failed_downloads_tickers=ss.failed_downloads_tickers,
+        )
+    except (DownloadedDataError, MissingColumnError, BenchmarkBacktestError) as e:
+        st.warning(f"{e}")
+        return
 
     with opt_results_container:
         progress_bar = st.progress(0)
 
     for i, ticker in enumerate(ss.tickers):
-        data = get_ticker_data_and_infos(
-            download_progress_placeholder,
-            download_success_placeholder,
-            download_fail_placeholder,
-            i,
-            ticker,
-        )
+        try:
+            data = get_ticker_data_and_infos(
+                download_progress_placeholder,
+                download_success_placeholder,
+                download_fail_placeholder,
+                i,
+                ticker,
+            )
+        except Exception as e:
+            st.warning(f"{e}")
+            continue
+
+        # Run optimization process for the current ticker.
         with opt_results_container:
             run_progress_placeholder = st.spinner(
                 MESSAGES["display_texts"]["messages"]["running_optimization"].format(
@@ -491,28 +553,31 @@ def start_optimization_process(
             )
 
             with run_progress_placeholder:
-                run_optimization(
-                    data=data, custom_constraint=None, ticker=ticker, benchmark_comparison=benchmark_comparison
-                )
+                run_optimization(data=data, custom_constraint=None, ticker=ticker, benchmark_comparison=benchmark_stats)
 
                 # Cominciamo col Monte Carlo, se richiesto!!
-                run_montecarlos_for_best_combs(benchmark_stats, ticker)
+                # run_montecarlos_for_best_combs(benchmark_stats, ticker)
+                if ss.get("opt_run_mc_wid"):
+                    montecarlo_columns: pd.DataFrame = add_montecarlo_stats(
+                        column_with_trade_returns=ss.opt_master_results_table[ticker][("BT Stats", "Trade_returns")],
+                        initial_capital=ss.initial_capital_wid,
+                        sampling_method=ss.opt_mc_sampling_method_wid,
+                        num_sims=ss.opt_mc_n_sims_wid,
+                        sim_length=ss.opt_mc_sim_length_wid,
+                        benchmark=benchmark_stats,
+                        data_interval=ss.data_interval_wid,
+                    )
+                    ss.opt_master_results_table[ticker][montecarlo_columns.columns] = montecarlo_columns
 
-                # cycles_summary, combs_stats = initiate_wfo(
-                #     data,
-                #     strat_class,
-                #     optimization_params_ranges,
-                #     objective_function_selection,
-                #     optimization_method_selection,
-                #     initial_capital,
-                #     commission_percent,
-                #     max_tries_sambo,
-                #     run_wfo,
-                #     wfo_n_cycles,
-                #     wfo_oos_ratio,
-                #     all_comb_data[all_comb_data.columns[:-1]],
-                # )  # Passiamogli la lista delle combinazioni provate
+                # if ss["opt_run_wfo_wid"]:
+                #     initiate_wfo(
+                #         run_wfo=ss["opt_run_wfo_wid"],
+                #         n_cycles=ss["opt_wfo_n_cycles_wid"],
+                #         oos_ratio=ss["opt_wfo_oos_ratio_wid"],
+                #         equity_lines=ss["equity_curves"].get(ticker),
+                #     )
 
+                # Gestiamo i risultati dell'ottimizzazione
                 manage_opt_run_infos(
                     run_success_placeholder,
                     run_fail_placeholder,
@@ -524,6 +589,52 @@ def start_optimization_process(
     progress_bar.empty()
 
     ss.opt_results_generated = True
+
+
+def add_montecarlo_stats(
+    column_with_trade_returns: pd.Series,
+    *,
+    initial_capital: float,
+    sampling_method: str,
+    num_sims: int,
+    sim_length: int,
+    benchmark: pd.Series,
+    data_interval: str = "1d",
+) -> pd.DataFrame:
+    """Perform Monte Carlo simulations on a column of trade returns.
+
+    Parameters
+    ----------
+    column_with_trade_returns : pd.Series
+        A column of trade returns to be used for the Monte Carlo simulations.
+    initial_capital : float
+        The initial capital.
+    sampling_method : str
+        The method for sampling trades ('permutazione' or 'resampling_con_reimmissione').
+    num_sims : int
+        The total number of simulations to run.
+    sim_length : int
+        The desired number of trades in each simulated path.
+    benchmark : bt_stats
+        The statistics from the benchmark backtest.
+    data_interval : str, optional
+        The data interval, by default "1d".
+
+    Returns
+    -------
+    pd.DataFrame
+        A DataFrame containing the results of the Monte Carlo simulations.
+
+    """
+    return column_with_trade_returns.apply(
+        get_montecarlo_stats,
+        initial_capital=initial_capital,
+        sampling_method=sampling_method,
+        num_sims=num_sims,
+        sim_length=sim_length,
+        benchmark=benchmark,
+        data_interval=data_interval,
+    )
 
 
 def _reset_info_res_containers(opt_infos_container: streamlit_obj, opt_results_container: streamlit_obj) -> None:
@@ -632,7 +743,7 @@ def manage_opt_run_infos(
         - Updates the UI with a message listing all successful or failed tickers.
 
     """
-    if ticker in ss.opt_combs_ranking:
+    if ticker in ss.opt_master_results_table:
         st.session_state.successful_runs_tickers.append(ticker)
         run_success_placeholder.success(
             MESSAGES["display_texts"]["messages"]["execution_completed"]
@@ -645,700 +756,7 @@ def manage_opt_run_infos(
         )
 
 
-def initiate_wfo(
-    data: pd.DataFrame,
-    strat_class: CommonStrategy,
-    optimization_params_ranges: dict[str : range | list],
-    objective_function: str,
-    opt_method: str,
-    initial_capital: float,
-    commission_percent: float,
-    max_tries_sambo: int,
-    run_wfo: bool,
-    n_cycles: int,
-    oos_ratio: float,
-    combinations_df: pd.DataFrame,
-):
-    if not run_wfo:
-        return None, None
-
-    param_names = list(combinations_df.columns)
-    valid_combinations_set = set(combinations_df[param_names].itertuples(index=False, name=None))
-
-    def dynamic_constraint(param_dict):
-        # Estrai solo i parametri che ci interessano
-        # param_values = tuple(kwargs.get(param) for param in param_names)
-        return tuple(param_dict.values()) in valid_combinations_set
-
-    params_to_test_in_wfo = {col: combinations_df[col].unique().tolist() for col in combinations_df.columns}
-
-    # Crea e esegui l'ottimizzatore
-    wfo = WalkForwardOptimizer(
-        data=data,
-        strategy_class=strat_class,
-        objective_function=objective_function,
-        opt_method=opt_method,
-        param_grid=params_to_test_in_wfo,
-        initial_capital=initial_capital,
-        commission_percent=commission_percent,
-        max_tries_sambo=max_tries_sambo,
-        n_cycles=n_cycles,
-        oos_ratio=oos_ratio,
-        constraint_wfo=dynamic_constraint,
-    )
-
-    # Esegui l'ottimizzazione. Results_df restituisce un df in cui ogni riga è un cliclo e le colonne sono le date, i migliori parametri
-    cycles_summary, combs_stats = wfo.run_wfo_optimization()
-
-    return cycles_summary, combs_stats
-
-
-class WalkForwardOptimizer:
-    def __init__(
-        self,
-        data: pd.DataFrame,
-        strategy_class: CommonStrategy,
-        param_grid: dict[str, range | list[float | int]],
-        n_cycles: int,
-        oos_ratio: float,
-        objective_function: str,
-        opt_method: str,
-        initial_capital: float,
-        commission_percent: float,
-        max_tries_sambo: int,
-        constraint_wfo: Callable,
-    ):
-        self.data = data.copy()
-        self.strategy_class = strategy_class
-        self.param_grid = param_grid
-        self.n_cycles = n_cycles
-        self.oos_ratio = oos_ratio
-        self.objective_func = objective_function
-        self.opt_method = opt_method
-        self.initial_capital = initial_capital
-        self.comm_percent = commission_percent
-        self.max_tries_sambo = max_tries_sambo
-        self.results = []
-        self.combs_stats = None
-        self.optimal_params_history = []
-        self.constraint_wfo = constraint_wfo
-
-        # Validazione input
-        self._validate_inputs()
-
-    def _validate_inputs(self):
-        """Valida gli input forniti"""
-        required_columns = ["Open", "High", "Low", "Close", "Volume"]
-        missing_cols = [col for col in required_columns if col not in self.data.columns]
-        if missing_cols:
-            raise ValueError(f"Colonne mancanti nel DataFrame: {missing_cols}")
-
-        if not 0 < self.oos_ratio < 1:
-            raise ValueError("test_ratio deve essere tra 0 e 1")
-
-        # if self.n_cycles < 2:
-        #     raise ValueError("n_cycles deve essere almeno 2")
-
-    def _calculate_windows(self) -> list[tuple[int, int, int, int]]:
-        """
-        Calcola le finestre di training e test per ogni ciclo.
-
-        Returns:
-            Lista di tuple (train_start, train_end, test_start, test_end)
-        """
-        total_rows = len(self.data)
-
-        # Calcola la dimensione di ogni ciclo
-        cycle_size = int(total_rows // ((self.n_cycles - 1) * self.oos_ratio + 1))
-        oos_size = int(cycle_size * self.oos_ratio)
-        is_size = cycle_size - oos_size
-
-        windows = []
-
-        for i in range(self.n_cycles):
-            if i == 0:
-                is_start = 0
-                is_end = is_size
-                oos_start = is_end
-                oos_end = min(oos_start + oos_size, total_rows)
-            else:
-                oos_start = oos_end
-                oos_end = min(oos_start + oos_size, total_rows)
-                is_end = oos_start
-                is_start = max(is_end - is_size, 0)
-
-            # Verifica che ci siano abbastanza dati
-            if oos_end <= oos_start or is_end <= is_start:
-                break
-
-            windows.append((is_start, is_end, oos_start, oos_end))
-
-        return windows
-
-    def _generate_param_combinations(self) -> list[dict]:
-        """Genera tutte le combinazioni possibili dei parametri."""
-        import itertools
-
-        keys = list(self.param_grid.keys())
-        values = list(self.param_grid.values())
-
-        combinations = []
-        combinations.extend(dict(zip(keys, combo, strict=False)) for combo in itertools.product(*values))
-        return combinations
-
-    def _optimize_parameters(self, train_data: pd.DataFrame) -> dict:
-        """
-        Ottimizza i parametri su un set di dati di training.
-
-        Args:
-            train_data: Dati per l'ottimizzazione
-
-        Returns:
-            Dizionario con i parametri ottimali
-        """
-        best_params = None
-        best_metric = -np.inf
-
-        param_combinations = self._generate_param_combinations()
-
-        for params in param_combinations:
-            try:
-                # Simula il backtesting con i parametri correnti
-                # Qui dovresti integrare con la tua libreria di backtesting preferita
-                metric = self._evaluate_strategy(train_data, params)
-
-                if metric > best_metric:
-                    best_metric = metric
-                    best_params = params.copy()
-
-            except Exception as e:
-                print(f"Errore con parametri {params}: {e}")
-                continue
-
-        return best_params or param_combinations[0]
-
-    def _evaluate_strategy(self, data: pd.DataFrame, params: dict) -> float:
-        """
-        Valuta una strategia con parametri specifici.
-
-        Args:
-            data: Dati per la valutazione
-            params: Parametri della strategia
-
-        Returns:
-            Metrica di performance (es. Sharpe Ratio, Return, etc.)
-        """
-        # PLACEHOLDER: Implementa qui la logica di backtesting
-        # Esempio con una strategia semplice di media mobile
-
-        if "ma_period" in params:
-            data = data.copy()
-            data["MA"] = data["Close"].rolling(window=params["ma_period"]).mean()
-            data["Signal"] = np.where(data["Close"] > data["MA"], 1, -1)
-            data["Returns"] = data["Close"].pct_change()
-            data["Strategy_Returns"] = data["Signal"].shift(1) * data["Returns"]
-
-            # Calcola metrica (es. Sharpe Ratio)
-            if data["Strategy_Returns"].std() != 0:
-                sharpe = data["Strategy_Returns"].mean() / data["Strategy_Returns"].std() * np.sqrt(252)
-                return sharpe
-
-        return 0.0
-
-    def _test_strategy(self, test_data: pd.DataFrame, params: dict) -> dict:
-        """
-        Testa la strategia con parametri ottimali su dati out-of-sample.
-
-        Args:
-            test_data: Dati per il test
-            params: Parametri ottimali
-
-        Returns:
-            Dizionario con le metriche di performance
-        """
-        try:
-            # Implementa la logica di test
-            test_data = test_data.copy()
-
-            if "ma_period" in params:
-                test_data["MA"] = test_data["Close"].rolling(window=params["ma_period"]).mean()
-                test_data["Signal"] = np.where(test_data["Close"] > test_data["MA"], 1, -1)
-                test_data["Returns"] = test_data["Close"].pct_change()
-                test_data["Strategy_Returns"] = test_data["Signal"].shift(1) * test_data["Returns"]
-
-                # Calcola metriche
-                total_return = (1 + test_data["Strategy_Returns"]).prod() - 1
-                volatility = test_data["Strategy_Returns"].std() * np.sqrt(252)
-                sharpe = (
-                    test_data["Strategy_Returns"].mean() / test_data["Strategy_Returns"].std() * np.sqrt(252)
-                    if test_data["Strategy_Returns"].std() != 0
-                    else 0
-                )
-
-                return {
-                    "total_return": total_return,
-                    "volatility": volatility,
-                    "sharpe_ratio": sharpe,
-                    "max_drawdown": self._calculate_max_drawdown(test_data["Strategy_Returns"]),
-                }
-        except Exception as e:
-            print(f"Errore nel test: {e}")
-
-        return {
-            "total_return": 0,
-            "volatility": 0,
-            "sharpe_ratio": 0,
-            "max_drawdown": 0,
-        }
-
-    def _calculate_max_drawdown(self, returns: pd.Series) -> float:
-        """Calcola il massimo drawdown"""
-        cumulative = (1 + returns).cumprod()
-        running_max = cumulative.expanding().max()
-        drawdown = (cumulative - running_max) / running_max
-        return drawdown.min()
-
-    def run_wfo_optimization(self) -> pd.DataFrame:
-        """Esegue la Walk Forward Optimization completa.
-
-        Returns:
-            DataFrame con i risultati di ogni ciclo
-
-        """
-        windows = self._calculate_windows()
-        col_wfo_cycle, col_task = st.columns(2)
-        with col_wfo_cycle:
-            wfo_info = st.empty()
-        with col_task:
-            wfo_task = st.empty()
-
-        for i, (train_start, train_end, test_start, test_end) in enumerate(windows):
-            wfo_info.info(f"WFO - Ciclo {i + 1}/{len(windows)}")
-            print(f"Training: righe {train_start} - {train_end} ({train_end - train_start} punti)")
-            print(f"Test: righe {test_start} - {test_end} ({test_end - test_start} punti)")
-
-            # Estrai dati di training e test
-            train_data = self.data.iloc[train_start:train_end].copy()
-            test_data = self.data.iloc[test_start:test_end].copy()
-
-            # Ottimizza parametri sui dati di training
-            wfo_task.info(f"Optimization of In Sample period {i + 1} in progress")
-            combs_ranking, optimal_params, _, _, _, _, _ = run_optimization(
-                train_data,
-                self.strategy_class,
-                self.param_grid,
-                self.objective_func,
-                "Grid Search",
-                self.initial_capital,
-                self.comm_percent,
-                self.max_tries_sambo,
-                self.constraint_wfo,
-            )
-
-            df_oos_results = pd.DataFrame()
-            for index, row in combs_ranking[
-                [col for col in combs_ranking.columns if col != self.objective_func]
-            ].iterrows():
-                param_comb = dict(row)
-                # Testa sui dati out-of-sample
-                wfo_task.info(f"Backtest of Out Of Sample period {i + 1}, combination {index + 1}/{len(combs_ranking)}")
-                test_results, _, _, _, _ = run_backtest(
-                    test_data,
-                    self.strategy_class,
-                    param_comb,
-                    self.initial_capital,
-                    self.comm_percent,
-                    False,
-                )
-                oos_result = test_results[self.objective_func]
-                row[f"{self.objective_func}_oos_cycle{i + 1}"] = oos_result
-                df_oos_results = pd.concat([df_oos_results, row.to_frame().T], ignore_index=True)
-            df_oos_results = df_oos_results.set_index(
-                [col for col in df_oos_results.columns if col in self.param_grid.keys()]
-            )
-
-            # Salva risultati
-            cycle_result = {
-                "cycle": i + 1,
-                "train_start": train_data.index[0].strftime("%d-%m-%Y"),
-                "train_end": train_data.index[-1].strftime("%d-%m-%Y"),
-                "test_start": test_data.index[0].strftime("%d-%m-%Y"),
-                "test_end": test_data.index[-1].strftime("%d-%m-%Y"),
-                "optimal_params": optimal_params,
-                **test_results,
-            }
-
-            self.results.append(cycle_result)
-
-            # Rendo i parametri parte dell'index (così posso fare l'outer join con gli altri cicli di WFO).
-            # Poi rinomino la colonna obbiettivo altrimenti negli outer join, avrò colonne con los tesso nome.
-            # Poi faccio l'outer join del dataframe con quello preesistente, se esiste
-            # L'obbiettivo è avere un df in cui il multiindex indica i parametri e le colonne i valori della funzione obbiettivo nelle varie run
-            combs_ranking = combs_ranking.set_index(
-                [col for col in combs_ranking.columns if col != self.objective_func]
-            )
-            combs_ranking = combs_ranking.rename(
-                columns={col: col + f"_is_cycle{i + 1}" for col in combs_ranking.columns if col == self.objective_func}
-            )
-            self.combs_stats = (
-                pd.merge(
-                    self.combs_stats,
-                    combs_ranking,
-                    how="outer",
-                    left_index=True,
-                    right_index=True,
-                )
-                if self.combs_stats is not None
-                else combs_ranking
-            )
-            self.combs_stats = (
-                pd.merge(
-                    self.combs_stats,
-                    df_oos_results,
-                    how="outer",
-                    left_index=True,
-                    right_index=True,
-                )
-                if self.combs_stats is not None
-                else combs_ranking
-            )
-
-            self.optimal_params_history.append(optimal_params)
-
-        wfo_info.empty()
-        wfo_task.empty()
-
-        # Aggiungo un po' di statistiche per capire come si comportano mediamente i parametri
-        columns_for_calcs = self.combs_stats[
-            [
-                col_name
-                for col_name in self.combs_stats.columns  # prendiamo solo le colonne dei risultati dei cicli
-                if col_name.rsplit("_is_cycle", 1)[0] == self.objective_func
-            ]
-        ]
-        self.combs_stats["Avg"] = columns_for_calcs.mean(
-            axis=1
-        )  # mettiamo la media del KPI in ogni ciclo. Facciamo uguale per altre statistiche
-        self.combs_stats["Std_Dev"] = columns_for_calcs.std(axis=1)
-        self.combs_stats["Count"] = columns_for_calcs.count(axis=1)
-        self.combs_stats["Max"] = columns_for_calcs.max(axis=1)
-        self.combs_stats["Min"] = columns_for_calcs.min(axis=1)
-        self.combs_stats["Ranks"] = self.combs_stats.rank(method="min", ascending=False).values.tolist()
-        self.combs_stats = self.combs_stats.drop(columns=columns_for_calcs.columns)
-
-        return pd.DataFrame(self.results), self.combs_stats
-
-    def get_summary_statistics(self) -> dict:
-        """Calcola statistiche riassuntive dell'ottimizzazione."""
-        if not self.results:
-            return {}
-
-        df = pd.DataFrame(self.results)
-
-        return {
-            "total_cycles": len(self.results),
-            "avg_return": df["total_return"].mean(),
-            "avg_sharpe": df["sharpe_ratio"].mean(),
-            "avg_volatility": df["volatility"].mean(),
-            "avg_max_drawdown": df["max_drawdown"].mean(),
-            "win_rate": (df["total_return"] > 0).sum() / len(df),
-            "best_cycle": df.loc[df["sharpe_ratio"].idxmax()]["cycle"],
-            "worst_cycle": df.loc[df["sharpe_ratio"].idxmin()]["cycle"],
-        }
-
-    def plot_wfo_timeline(self) -> None:
-        """Plot the timeline of Walk Forward Optimization cycles.
-
-        Visualizes the training and test periods for each WFO cycle using matplotlib.
-        """
-        try:
-            import matplotlib.patches as patches
-            import matplotlib.pyplot as plt
-            from matplotlib.dates import DateFormatter
-
-            if not self.results:
-                print("Nessun risultato da visualizzare. Esegui prima run_optimization()")
-                return
-
-            # Verifica se abbiamo una colonna Date
-            has_dates = "Date" in self.data.columns
-            if has_dates:
-                dates = pd.to_datetime(self.data["Date"])
-            else:
-                # Crea date fittizie per la visualizzazione
-                dates = pd.date_range("2020-01-01", periods=len(self.data), freq="D")
-
-            # Crea figura con un solo subplot
-            fig, ax1 = plt.subplots(figsize=(18, 10))  # Aumentata per avere più spazio
-
-            # Colori per training e test
-            train_color = "#2E8B57"  # Verde scuro
-            test_color = "#DC143C"  # Rosso
-
-            # Altezza delle barre (ridotta per lasciare spazio al testo)
-            bar_height = 0.6
-
-            # Disegna ogni ciclo
-            for i, result in enumerate(self.results):
-                y_pos = len(self.results) - i - 1  # Inverti l'ordine per avere il ciclo 1 in alto
-
-                # Date di inizio e fine per training e test
-                train_start_date = dates.iloc[result["train_start"]]
-                train_end_date = dates.iloc[result["train_end"] - 1]
-                test_start_date = dates.iloc[result["test_start"]]
-                test_end_date = dates.iloc[result["test_end"] - 1]
-
-                # Calcola durate
-                train_duration = result["train_end"] - result["train_start"]
-                test_duration = result["test_end"] - result["test_start"]
-
-                # Barra di training (verde)
-                train_width = (train_end_date - train_start_date).days
-                train_rect = patches.Rectangle(
-                    (train_start_date, y_pos - bar_height / 2),
-                    pd.Timedelta(days=train_width),
-                    bar_height,
-                    linewidth=1,
-                    edgecolor="black",
-                    facecolor=train_color,
-                    alpha=0.8,
-                    label="Training" if i == 0 else "",
-                )
-                ax1.add_patch(train_rect)
-
-                # Barra di test (rosso)
-                test_width = (test_end_date - test_start_date).days
-                test_rect = patches.Rectangle(
-                    (test_start_date, y_pos - bar_height / 2),
-                    pd.Timedelta(days=test_width),
-                    bar_height,
-                    linewidth=1,
-                    edgecolor="black",
-                    facecolor=test_color,
-                    alpha=0.8,
-                    label="Test" if i == 0 else "",
-                )
-                ax1.add_patch(test_rect)
-
-                # Etichetta del ciclo a sinistra
-                ax1.text(
-                    train_start_date - pd.Timedelta(days=30),
-                    y_pos,
-                    f"Ciclo {result['cycle']}",
-                    ha="right",
-                    va="center",
-                    fontweight="bold",
-                    fontsize=11,
-                )
-
-                # === TESTO SULLE BARRE ===
-
-                # Data di inizio training (sopra la barra training, a sinistra)
-                ax1.text(
-                    train_start_date,
-                    y_pos + bar_height / 2 + 0.08,
-                    train_start_date.strftime("%d/%m/%y"),
-                    ha="left",
-                    va="bottom",
-                    fontsize=9,
-                    fontweight="bold",
-                    rotation=0,
-                    color="darkgreen",
-                )
-
-                # Data di fine training / inizio test (una sola data al punto di transizione)
-                transition_date = train_end_date  # Fine training = inizio test
-                ax1.text(
-                    transition_date,
-                    y_pos + bar_height / 2 + 0.08,
-                    transition_date.strftime("%d/%m/%y"),
-                    ha="center",
-                    va="bottom",
-                    fontsize=9,
-                    fontweight="bold",
-                    rotation=0,
-                    color="black",
-                )  # Nero per indicare la transizione
-
-                # Data di fine test (sopra la barra test, a destra)
-                ax1.text(
-                    test_end_date,
-                    y_pos + bar_height / 2 + 0.08,
-                    test_end_date.strftime("%d/%m/%y"),
-                    ha="right",
-                    va="bottom",
-                    fontsize=9,
-                    fontweight="bold",
-                    rotation=0,
-                    color="darkred",
-                )
-
-                # Durata training (al centro della barra training)
-                train_center = train_start_date + pd.Timedelta(days=train_width / 2)
-                ax1.text(
-                    train_center,
-                    y_pos,
-                    f"{train_duration}d",
-                    ha="center",
-                    va="center",
-                    fontsize=11,
-                    fontweight="bold",
-                    color="white",
-                    bbox=dict(
-                        boxstyle="round,pad=0.3",
-                        facecolor="darkgreen",
-                        alpha=0.8,
-                        edgecolor="none",
-                    ),
-                )
-
-                # Durata test (al centro della barra test)
-                test_center = test_start_date + pd.Timedelta(days=test_width / 2)
-                ax1.text(
-                    test_center,
-                    y_pos,
-                    f"{test_duration}d",
-                    ha="center",
-                    va="center",
-                    fontsize=11,
-                    fontweight="bold",
-                    color="white",
-                    bbox=dict(
-                        boxstyle="round,pad=0.3",
-                        facecolor="darkred",
-                        alpha=0.8,
-                        edgecolor="none",
-                    ),
-                )
-
-            # Configurazione degli assi del grafico (aumentato spazio verticale per le date)
-            ax1.set_xlim(dates.min() - pd.Timedelta(days=50), dates.max() + pd.Timedelta(days=30))
-            ax1.set_ylim(-0.7, len(self.results) - 0.3)  # Più spazio per le etichette
-
-            # Formattazione delle date sull'asse x
-            ax1.xaxis.set_major_formatter(DateFormatter("%m/%Y"))
-            plt.setp(ax1.xaxis.get_majorticklabels(), rotation=45)
-
-            # Rimuovi i tick dell'asse Y
-            ax1.set_yticks([])
-
-            # Calcola date di inizio e fine dell'intera WFO
-            overall_start_date = dates.iloc[self.results[0]["train_start"]]
-            overall_end_date = dates.iloc[self.results[-1]["test_end"] - 1]
-
-            # Titolo del grafico
-            ax1.set_title(
-                f"Walk Forward Optimization Timeline\n"
-                f"{overall_start_date.strftime('%d/%m/%Y')} - {overall_end_date.strftime('%d/%m/%Y')}\n"
-                f"{len(self.results)} cicli - {self.oos_ratio * 100:.0f}% test ratio",
-                fontsize=16,
-                fontweight="bold",
-                pad=25,
-            )
-            ax1.set_xlabel("Periodo Temporale", fontsize=14)
-
-            # Legenda migliorata
-            ax1.legend(loc="upper right", bbox_to_anchor=(1, 1), fontsize=12)
-
-            # Griglia leggera
-            ax1.grid(True, axis="x", alpha=0.3, linestyle="--")
-
-            # Layout finale
-            plt.tight_layout()
-            plt.show()
-
-            # # Stampa statistiche riassuntive più dettagliate
-            # print("\n" + "="*90)
-            # print("STATISTICHE WALK FORWARD OPTIMIZATION")
-            # print("="*90)
-
-            # total_cycles = len(self.results)
-            # avg_train_duration = sum(r['train_end'] - r['train_start'] for r in self.results) / total_cycles
-            # avg_test_duration = sum(r['test_end'] - r['test_start'] for r in self.results) / total_cycles
-
-            # overall_start = self.results[0]['train_start']
-            # overall_end = self.results[-1]['test_end']
-            # total_period = overall_end - overall_start
-
-            # print(f"📊 Totale cicli: {total_cycles}")
-            # print(f"🏋️  Durata media training: {avg_train_duration:.1f} giorni")
-            # print(f"🧪 Durata media test: {avg_test_duration:.1f} giorni")
-            # print(f"📅 Periodo totale analizzato: {total_period} giorni")
-            # print(f"🗓️  Range temporale: {overall_start_date.strftime('%d/%m/%Y')} - {overall_end_date.strftime('%d/%m/%Y')}")
-            # print(f"📈 Rapporto out-of-sample: {self.oos_ratio*100:.1f}%")
-
-            # # Statistiche dettagliate per ciclo
-            # print(f"\n{'Ciclo':<8} {'Train Days':<12} {'Test Days':<12} {'Train Start':<12} {'Test End':<12}")
-            # print("-" * 60)
-            # for result in self.results:
-            #     train_duration = result['train_end'] - result['train_start']
-            #     test_duration = result['test_end'] - result['test_start']
-            #     train_start = dates.iloc[result['train_start']].strftime('%d/%m/%y')
-            #     test_end = dates.iloc[result['test_end']-1].strftime('%d/%m/%y')
-            #     print(f"{result['cycle']:<8} {train_duration:<12} {test_duration:<12} {train_start:<12} {test_end:<12}")
-
-            # # Calcola e mostra eventuali sovrapposizioni
-            # overlaps = 0
-            # for i in range(1, len(self.results)):
-            #     if self.results[i]['train_start'] < self.results[i-1]['test_end']:
-            #         overlaps += 1
-
-            # if overlaps > 0:
-            #     print(f"\n⚠️  Cicli con sovrapposizione temporale: {overlaps}")
-            # else:
-            #     print(f"\n✅ Nessuna sovrapposizione temporale tra cicli")
-
-        except ImportError:
-            print("Matplotlib non disponibile per la visualizzazione")
-
-    def plot_results(self) -> None:
-        """Visualizza i risultati dell'ottimizzazione."""
-        try:
-            import matplotlib.pyplot as plt
-
-            if not self.results:
-                print("Nessun risultato da visualizzare. Esegui prima run_optimization()")
-                return
-
-            df = pd.DataFrame(self.results)
-
-            fig, axes = plt.subplots(2, 2, figsize=(15, 10))
-            fig.suptitle("Walk Forward Optimization Results", fontsize=16)
-
-            # Return per ciclo
-            axes[0, 0].bar(df["cycle"], df["total_return"])
-            axes[0, 0].set_title("Return per Ciclo")
-            axes[0, 0].set_xlabel("Ciclo")
-            axes[0, 0].set_ylabel("Return")
-            axes[0, 0].axhline(y=0, color="r", linestyle="--", alpha=0.5)
-
-            # Sharpe Ratio per ciclo
-            axes[0, 1].plot(df["cycle"], df["sharpe_ratio"], marker="o")
-            axes[0, 1].set_title("Sharpe Ratio per Ciclo")
-            axes[0, 1].set_xlabel("Ciclo")
-            axes[0, 1].set_ylabel("Sharpe Ratio")
-            axes[0, 1].axhline(y=0, color="r", linestyle="--", alpha=0.5)
-
-            # Volatilità per ciclo
-            axes[1, 0].plot(df["cycle"], df["volatility"], marker="s", color="orange")
-            axes[1, 0].set_title("Volatilità per Ciclo")
-            axes[1, 0].set_xlabel("Ciclo")
-            axes[1, 0].set_ylabel("Volatilità")
-
-            # Max Drawdown per ciclo
-            axes[1, 1].bar(df["cycle"], df["max_drawdown"], color="red", alpha=0.7)
-            axes[1, 1].set_title("Max Drawdown per Ciclo")
-            axes[1, 1].set_xlabel("Ciclo")
-            axes[1, 1].set_ylabel("Max Drawdown")
-
-            plt.tight_layout()
-            plt.show()
-
-        except ImportError:
-            print("Matplotlib non disponibile per la visualizzazione")
-
-
-def make_sambo_plots(all_comb_data: pd.DataFrame, sambo_plots: object) -> None:
+def make_sambo_plots(all_comb_data: pd.DataFrame, sambo_plots: OptimizeResult) -> list[Figure]:
     """Display SAMBO optimization plots for the given parameter combinations and plot data.
 
     Args:
@@ -1349,7 +767,9 @@ def make_sambo_plots(all_comb_data: pd.DataFrame, sambo_plots: object) -> None:
         None
 
     """
-    varying_params: list[tuple[int, str]] = list_varying_params(all_comb_data.index.to_frame())
+    varying_params: list[tuple[int, str]] = list_varying_params(
+        all_comb_data[[("Strategy", "Param Values"), ("Strategy", "Param Names")]]
+    )
     varying_param_names = [p[1] for p in varying_params]
     varying_param_idx = [p[0] for p in varying_params]
 

@@ -20,4 +20,7 @@
             "source.sortImports": "explicit"
         }
     },
+    "python.analysis.typeCheckingMode": "standard",
+    "python.analysis.autoImportCompletions": true,
+    "codium.codeCompletion.enable": true,
 }

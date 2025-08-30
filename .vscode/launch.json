@@ -6,11 +6,11 @@
             "type": "debugpy",
             "request": "launch",
             "module": "streamlit",
-            "justMyCode": false,
+            "justMyCode": true,
             "args": [
                 "run",
                 // "${file}",
-                "main.py",
+                "bost.py",
                 "--server.port",
                 "2000"
             ]

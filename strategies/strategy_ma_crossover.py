@@ -81,7 +81,7 @@ class MACrossoverStrategy(CommonStrategy):
         },
         # SL/TP parameters - Puoi lasciare i valori di default da CommonStrategy o personalizzarli
         {
-            "name": "sl_percent",
+            "name": "sl_pct",
             "type": float,
             "default": 0.05,
             "lowest": 0.00,
@@ -91,7 +91,7 @@ class MACrossoverStrategy(CommonStrategy):
             "step": 0.005,
         },
         {
-            "name": "tp_percent",
+            "name": "tp_pct",
             "type": float,
             "default": 0.00,
             "lowest": 0.00,

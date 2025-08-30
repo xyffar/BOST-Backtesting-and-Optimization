@@ -27,7 +27,7 @@ def render_opt_button_and_pars_combs(args_for_opt: list) -> None:
             use_container_width=True,
             key="run_optimization_button_wid",
             on_click=start_optimization_process,
-            args=args_for_opt,
+            args=tuple(args_for_opt),
         )
 
     with col_combs:
@@ -118,7 +118,7 @@ def render_opt_mc_settings() -> None:
         with cols[2]:
             mc_sampling_method = st.selectbox(
                 display_texts.get("mc_sampling_method_label", "Sampling Method"),
-                options=["resampling_con_reimmissione", "permutazione"],
+                options=MESSAGES.get("monte_carlo_sampling_methods", []),
                 help=display_texts.get(
                     "mc_sampling_method_help", "Bootstrap resampling is typically preferred for future scenarios."
                 ),
@@ -135,7 +135,7 @@ def render_opt_mc_settings() -> None:
             )
 
         with cols[4]:
-            is_resampling = mc_sampling_method == "resampling_con_reimmissione"
+            is_resampling = mc_sampling_method == MESSAGES.get("monte_carlo_sampling_methods", [])[0]
             st.number_input(
                 display_texts.get("mc_sim_length_label", "# Trades per Simulation"),
                 value=0,
@@ -196,14 +196,14 @@ def _render_single_optimization_param(param_def: dict) -> list | range | None:
                               parameter type is not supported for optimization.
 
     """
-    param_name = param_def.get("name")
+    param_name = param_def.get("name") or ""
     param_type = param_def.get("type")
     display_texts = MESSAGES.get("display_texts", {})
     messages = display_texts.get("messages", {})
 
     display_name = param_name.replace("_", " ").title()
-    if param_name in ["sl_percent", "tp_percent"]:
-        display_name = display_name.replace("Percent", "(%)")
+    if param_name in ["sl_pct", "tp_pct"]:
+        display_name = display_name.replace("Pct", "(%)")
 
     st.markdown(f"**{display_name}**")
 
@@ -218,7 +218,7 @@ def _render_single_optimization_param(param_def: dict) -> list | range | None:
 
     # --- Numeric Parameters (int, float) ---
     if param_type in (int, float):
-        is_percentage = param_name in ["sl_percent", "tp_percent"]
+        is_percentage = param_name in ["sl_pct", "tp_pct"]
         multiplier = 100.0 if is_percentage else 1.0
         value_format = "%d" if param_type is int else "%.2f"
 

@@ -19,8 +19,10 @@ class CommonStrategy(Strategy):
     """
 
     # Default parameters for Stop Loss and Take Profit. Will be overridden by the UI.
-    sl_percent: float = 0.05
-    tp_percent: float = 0.10
+    sl_pct: float = 0.05
+    tp_pct: float = 0.10
+
+    DISPLAY_NAME: ClassVar[str] = "Common Strategy"
 
     # Attribute to define strategy-specific optimization constraints.
     # Must be a callable that accepts a 'stats' object and returns True/False.
@@ -29,10 +31,10 @@ class CommonStrategy(Strategy):
 
     # Class variable to define strategy parameters.
     # Should be overridden in child strategies for their specific parameters,
-    # and should also include sl_percent and tp_percent for optimization.
+    # and should also include sl_pct and tp_pct for optimization.
     PARAMS_INFO: ClassVar[list[dict[str, Any]]] = [
         {
-            "name": "sl_percent",
+            "name": "sl_pct",
             "type": float,
             "default": 0.05,
             "lowest": 0.00,
@@ -42,7 +44,7 @@ class CommonStrategy(Strategy):
             "step": 0.005,
         },  # Optimizable
         {
-            "name": "tp_percent",
+            "name": "tp_pct",
             "type": float,
             "default": 0.10,
             "lowest": 0.00,
@@ -67,8 +69,8 @@ class CommonStrategy(Strategy):
         """Open a long position if no position is currently open, setting stop loss and take profit."""
         if not self.position:  # Entra solo se non c'è una posizione aperta
             # current_close: float = self.data.Close[-1]
-            sl_price: float = self.data.Close[-1] * (1 - self.sl_percent) if self.sl_percent != 0 else None
-            tp_price: float = self.data.Close[-1] * (1 + self.tp_percent) if self.tp_percent != 0 else None
+            sl_price: float = self.data.Close[-1] * (1 - self.sl_pct) if self.sl_pct != 0 else None
+            tp_price: float = self.data.Close[-1] * (1 + self.tp_pct) if self.tp_pct != 0 else None
             self.buy(sl=sl_price, tp=tp_price)
             # print(f"LONG - Entry: {current_close:.2f}, SL: {sl_price:.2f}, TP: {tp_price:.2f}")
 

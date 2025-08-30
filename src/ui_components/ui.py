@@ -55,8 +55,8 @@ def _render_period_and_granularity_inputs() -> None:
     """Render sidebar widgets for date range and data interval."""
     display_texts = MESSAGES.get("display_texts", {})
     general_settings = MESSAGES.get("general_settings", {})
-    default_intervals = ["1d", "1h", "1wk", "1mo"]
-    intervals = general_settings.get("data_intervals", default_intervals)
+    # default_intervals = ["1d", "1h", "1wk", "1mo"]
+    intervals = list(general_settings.get("data_intervals").keys())
 
     st.markdown(f"### {display_texts.get('data_period_granularity_header', 'Period and Data Granularity')}")
     col_start_date, col_end_date = st.columns(2)

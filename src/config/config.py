@@ -6,14 +6,15 @@ from os.path import dirname, join
 import streamlit as st
 import yaml
 from openpyxl.styles import Border, Font, PatternFill, Side
+from streamlit.delta_generator import DeltaGenerator
 
-streamlit_obj = type[st.delta_generator.DeltaGenerator]
+streamlit_obj = DeltaGenerator
 ss = st.session_state
 
 # The first value indicate the default value when the app starts.
 # The second indicates if it has to reset when a new backtest starts.
 # The third indicates if it has to reset when a new optimization starts.
-session_state_names = {
+session_state_names: dict[str, tuple[object, bool, bool]] = {
     "tickers": ([], False, False),  # List of tickers: list[str]
     "mode": ("backtest", False, False),  # Either backtest or optimization: str
     "all_strategies": ({}, False, False),  # Dictionary of all found strategies: dict[str, CommonStrategy]
@@ -51,10 +52,16 @@ session_state_names = {
     "opt_params": ({}, False, False),  # Dictionary of params for optimization: dict[str : list | range]
     "opt_results_generated": (False, False, True),  # Bool to indicate the presence of optimization results: bool
     "trade_returns": ({}, False, True),  # List of trade returns for each combination: dict{str: pd.Series[list[float]]}
+    "equity_curves": (
+        {},
+        False,
+        True,
+    ),  # List of equity curves for each combination: dict{str: pd.Series[pd.Series[float]]}
+    "opt_master_results_table": ({}, False, True),  # Dictionary of tables with full results: dict[str : pd.DataFrame]
     "opt_combs_ranking": ({}, False, True),
     "opt_heatmaps": ({}, False, True),  # Dictionary with heatmaps: doct[str: list[plt.Figure]]
-    "opt_mc_results": ({}, False, True),
     "opt_sambo_plots": ({}, False, True),
+    "opt_mc_results": ({}, False, True),
 }
 
 # Default dates (last 5 years until today)
@@ -94,6 +101,12 @@ THIN_BORDER = Border(
     top=Side(style="thin", color="D3D3D3"),
     bottom=Side(style="thin", color="D3D3D3"),
 )
+
+# StatProperty = dict[str, str | bool | int | None]
+# ConfigType = dict[
+#     str,
+#     dict[str, str | float | int | dict[str, int]] | list[StatProperty] | list[int | str] | str,
+# ]
 
 
 def load_messages_from_yaml(file_path: str) -> dict:

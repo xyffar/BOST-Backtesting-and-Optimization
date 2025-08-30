@@ -1,32 +1,36 @@
 # strategies/strategy_rsi.py
 
-from typing import Any, Callable, Dict, List, Optional  # Added List, Dict
+from collections.abc import Callable
+from typing import Any, ClassVar
 
 import pandas as pd
 import pandas_ta as ta
-from backtesting import Strategy
 from backtesting.lib import crossover
 
 from strategies.common_strategy import CommonStrategy  # Importa la strategia base
 
 
-# La strategia basata sull'RSI
 class RSIStrategy(CommonStrategy):
-    # Parametri specifici per questa strategia
-    rsi_period: int = 14
-    oversold_level: int = 30
-    overbought_level: int = 70
+    """RSI strategy that implements a trading logic based on the RSI (Relative Strength Index).
 
-    # Nome per visualizzazione
-    DISPLAY_NAME = "RSI"
+    This strategy allows only long positions.
+    """
 
-    # Vincolo di ottimizzazione: oversold_level deve essere minore di overbought_level
-    optimization_constraint: Optional[Callable[[pd.Series], bool]] = (
+    # Parameters specific to this strategy
+    rsi_period: int = 14  # RSI period
+    oversold_level: int = 30  # Oversold level
+    overbought_level: int = 70  # Overbought level
+
+    # Name for visualization
+    DISPLAY_NAME: ClassVar[str] = "RSI"
+
+    # Optimization constraint: oversold_level must be less than overbought_level
+    optimization_constraint: ClassVar[Callable[[pd.Series], bool] | None] = (
         lambda s: s.oversold_level < s.overbought_level
     )
 
-    # Definizione dei parametri per la UI e l'ottimizzazione
-    PARAMS_INFO: List[Dict[str, Any]] = [
+    # Definition of parameters for the UI and optimization
+    PARAMS_INFO: ClassVar[list[dict[str, Any]]] = [
         {
             "name": "rsi_period",
             "type": int,
@@ -57,9 +61,9 @@ class RSIStrategy(CommonStrategy):
             "max": 80,
             "step": 1,
         },
-        # SL/TP parameters
+        # Stop loss and take profit parameters
         {
-            "name": "sl_percent",
+            "name": "sl_pct",
             "type": float,
             "default": 0.05,
             "lowest": 0.00,
@@ -69,7 +73,7 @@ class RSIStrategy(CommonStrategy):
             "step": 0.005,
         },
         {
-            "name": "tp_percent",
+            "name": "tp_pct",
             "type": float,
             "default": 0.00,
             "lowest": 0.00,
@@ -81,30 +85,26 @@ class RSIStrategy(CommonStrategy):
     ]
 
     def init(self) -> None:
-        """
-        Inizializza la strategia calcolando l'RSI.
-        """
-        CloseSeries: pd.Series = pd.Series(self.data.Close)
-        self.rsi = self.I(ta.rsi, CloseSeries, self.rsi_period)
+        """Initialize the strategy by calculating the RSI."""
+        close_series: pd.Series = pd.Series(self.data.Close)
+        self.rsi: pd.Series = self.I(ta.rsi, close_series, self.rsi_period)
 
     def next(self) -> None:
+        """Implement the trading logic based on the RSI.
+
+        Only long positions are allowed.
         """
-        Implementa la logica di trading basata sull'RSI.
-        Permette solo posizioni LONG.
-        """
-        # Segnale di acquisto: RSI attraversa al di sopra il livello di oversold
+        # Buy signal: RSI crosses above the oversold level
         buy_signal: bool = crossover(self.rsi, self.oversold_level)
 
-        # Segnale di chiusura/ribassista: RSI attraversa al di sotto il livello di overbought
-        # o in generale scende da un livello di overbought.
+        # Close signal: RSI crosses below the overbought level or generally falls from an overbought level.
         close_signal: bool = crossover(self.overbought_level, self.rsi)
 
-        # Logica di entrata:
-        # Se non c'è una posizione aperta e c'è un segnale di acquisto, apri una posizione LONG.
+        # Trading logic:
+        # If no position is open and there is a buy signal, open a long position.
         if not self.position:
             if buy_signal:
-                self._buy_long()  # Usa il metodo helper dalla classe base
-        # Logica di uscita:
-        # Se c'è una posizione aperta e c'è un segnale di chiusura, chiudi la posizione.
+                self._buy_long()  # Use the helper method from the base class
+        # If a position is open and there is a close signal, close the position.
         elif close_signal:
-            self._close_position()  # Usa il metodo helper dalla classe base
+            self._close_position()  # Use the helper method from the base class

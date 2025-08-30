@@ -6,7 +6,23 @@ import yfinance as yf
 from src.config.config import MESSAGES, ss, streamlit_obj
 
 
-def download_data(ticker: str, start_date: str, end_date: str, interval: str) -> tuple[pd.DataFrame | None, str, str]:
+class DownloadedDataError(Exception):
+    """Custom exception indicating an error with downloaded data."""
+
+    def __init__(self, message: str) -> None:
+        """Initialize the DownloadedDataError with a descriptive error message."""
+        super().__init__(message)
+
+
+class MissingColumnError(Exception):
+    """Custom exception indicating that required columns are missing in the data."""
+
+    def __init__(self, message: str) -> None:
+        """Initialize the MissingColumnInData with a descriptive error message."""
+        super().__init__(message)
+
+
+def download_data(ticker: str, start_date: str, end_date: str, interval: str) -> pd.DataFrame:
     """Download historical data for a given ticker using yfinance.
 
     Args:
@@ -21,60 +37,43 @@ def download_data(ticker: str, start_date: str, end_date: str, interval: str) ->
                Message includes the ticker and the result.
 
     """
-    try:
-        data = yf.download(
-            ticker,
-            start=start_date,
-            end=end_date,
-            interval=interval,
-            progress=False,
-            multi_level_index=False,
-            auto_adjust=True,
-        )  # Disable yfinance's internal progress
+    data = yf.download(
+        ticker,
+        start=start_date,
+        end=end_date,
+        interval=interval,
+        progress=False,
+        multi_level_index=False,
+        auto_adjust=True,
+    )  # Disable yfinance's internal progress
 
-        if data.empty:
-            return (
-                None,
-                "failure",
-                MESSAGES["display_texts"]["data_handler"]["no_data_found"].format(ticker=ticker),
-            )
+    if data is None or data.empty:
+        raise DownloadedDataError(MESSAGES["display_texts"]["data_handler"]["no_data_found"].format(ticker=ticker))
 
-        # If columns are a MultiIndex (common with yfinance when downloading
-        # multiple items or specific fields),
-        # remove the upper or lower level to flatten it.
-        if isinstance(data.columns, pd.MultiIndex):
-            data.columns = data.columns.droplevel(-1)
+    # If columns are a MultiIndex (common with yfinance when downloading
+    # multiple items or specific fields),
+    # remove the upper or lower level to flatten it.
+    if isinstance(data.columns, pd.MultiIndex):
+        data.columns = data.columns.droplevel(-1)
 
-        # Now that columns are a simple Index, capitalize them
-        data.columns = data.columns.str.capitalize()
+    # Now that columns are a simple Index, capitalize them
+    data.columns = data.columns.str.capitalize()
 
-        # Ensure required columns are present
-        required_cols = ["Open", "High", "Low", "Close", "Volume"]
-        if any(col not in data.columns for col in required_cols):
-            return (
-                None,
-                "failure",
-                MESSAGES["display_texts"]["data_handler"]["required_columns_missing"].format(ticker=ticker),
-            )
-
-        # Ensure the index is a DatetimeIndex
-        data.index = pd.to_datetime(data.index)
-        data = data.sort_index()
-
-        return (
-            data,
-            "success",
-            MESSAGES["display_texts"]["data_handler"]["data_download_success"].format(ticker=ticker),
-        )
-    except Exception as e:
-        return (
-            None,
-            "failure",
-            MESSAGES["display_texts"]["data_handler"]["data_download_error"].format(ticker=ticker, e=e),
+    # Ensure required columns are present
+    required_cols = ["Open", "High", "Low", "Close", "Volume"]
+    if any(col not in data.columns for col in required_cols):
+        raise MissingColumnError(
+            MESSAGES["display_texts"]["data_handler"]["required_columns_missing"].format(ticker=ticker)
         )
 
+    # Ensure the index is a DatetimeIndex
+    data.index = pd.to_datetime(data.index)
+    data = data.sort_index()
 
-def get_sp500_data(start_date: str, end_date: str, interval: str) -> tuple[pd.DataFrame | None, str, str]:
+    return data
+
+
+def get_sp500_data(start_date: str, end_date: str, interval: str) -> pd.DataFrame:
     """Download historical S&P 500 benchmark data using yfinance.
 
     This function specifically targets the S&P 500 (SPY ticker) to provide
@@ -91,49 +90,49 @@ def get_sp500_data(start_date: str, end_date: str, interval: str) -> tuple[pd.Da
                Message indicates the result of the download.
 
     """
-    try:
-        data = yf.download(
-            MESSAGES["general_settings"]["sp500_ticker"],
-            start=start_date,
-            end=end_date,
-            interval=interval,
-            progress=False,
-            multi_level_index=False,
-            auto_adjust=True,
-        )  # Disable yfinance's internal progress
-        if data.empty:
-            return (
-                None,
-                "failure",
-                MESSAGES["display_texts"]["data_handler"]["no_benchmark_data_found"].format(
-                    SP500_TICKER=MESSAGES["general_settings"]["sp500_ticker"]
-                ),
-            )
+    # try:
+    data = yf.download(
+        MESSAGES["general_settings"]["sp500_ticker"],
+        start=start_date,
+        end=end_date,
+        interval=interval,
+        progress=False,
+        multi_level_index=False,
+        auto_adjust=True,
+    )  # Disable yfinance's internal progress
 
-        # If columns are a MultiIndex, flatten it
-        if isinstance(data.columns, pd.MultiIndex):
-            data.columns = data.columns.droplevel(-1)
-
-        # Now that columns are a simple Index, capitalize them
-        data.columns = data.columns.str.capitalize()
-
-        data.index = pd.to_datetime(data.index)
-        data = data.sort_index()
-        return (
-            data,
-            "success",
-            MESSAGES["display_texts"]["data_handler"]["benchmark_download_success"].format(
+    if data is None or data.empty:
+        raise DownloadedDataError(
+            MESSAGES["display_texts"]["data_handler"]["no_benchmark_data_found"].format(
                 SP500_TICKER=MESSAGES["general_settings"]["sp500_ticker"]
-            ),
+            )
         )
-    except Exception as e:
-        return (
-            None,
-            "failure",
-            MESSAGES["display_texts"]["data_handler"]["benchmark_download_error"].format(
-                SP500_TICKER=MESSAGES["general_settings"]["sp500_ticker"], e=e
-            ),
+
+    # If columns are a MultiIndex, flatten it
+    if isinstance(data.columns, pd.MultiIndex):
+        data.columns = data.columns.droplevel(-1)
+
+    # Now that columns are a simple Index, capitalize them
+    data.columns = data.columns.str.capitalize()
+    # Ensure required columns are present
+    required_cols = ["Open", "High", "Low", "Close", "Volume"]
+    if any(col not in data.columns for col in required_cols):
+        raise MissingColumnError(
+            MESSAGES["display_texts"]["data_handler"]["required_columns_missing"].format(ticker="Benchmark")
         )
+
+    data.index = pd.to_datetime(data.index)
+    data = data.sort_index()
+    return data
+
+    # except Exception as e:
+    #     return (
+    #         None,
+    #         "failure",
+    #         MESSAGES["display_texts"]["data_handler"]["benchmark_download_error"].format(
+    #             SP500_TICKER=MESSAGES["general_settings"]["sp500_ticker"], e=e
+    #         ),
+    #     )
 
 
 def calculate_benchmark_return(benchmark_data: pd.DataFrame) -> float:
@@ -172,7 +171,7 @@ def get_ticker_data_and_infos(
     download_fail_placeholder: streamlit_obj,
     i: int,
     ticker: str,
-) -> pd.DataFrame | None:
+) -> pd.DataFrame:
     """Download data for a specific ticker and manage Streamlit UI elements to display download progress, success, or failure messages.
 
     Updates Streamlit session state with successful and failed downloads.
@@ -205,18 +204,21 @@ def get_ticker_data_and_infos(
             ticker=ticker, current_idx=i + 1, total_tickers=len(ss.tickers)
         )
     )
-    data, status, msg = download_data(ticker, ss.start_date_wid, ss.end_date_wid, ss.data_interval_wid)
-    download_progress_placeholder.empty()  # Remove blue progress box
-
-    if status == "success":
+    try:
+        data = download_data(ticker, ss.start_date_wid, ss.end_date_wid, ss.data_interval_wid)
+    except (DownloadedDataError, MissingColumnError) as e:
+        ss.failed_downloads_tickers.append(ticker)
+        download_fail_placeholder.error(
+            MESSAGES["display_texts"]["messages"]["download_failed_ticker"] + ", ".join(ss.failed_downloads_tickers)
+        )
+        raise e
+    else:
         ss.successful_downloads_tickers.append(ticker)
         download_success_placeholder.success(
             MESSAGES["display_texts"]["messages"]["download_success_ticker"]
             + ", ".join(ss.successful_downloads_tickers)
         )
-    else:
-        ss.failed_downloads_tickers.append(ticker)
-        download_fail_placeholder.error(
-            MESSAGES["display_texts"]["messages"]["download_failed_ticker"] + ", ".join(ss.failed_downloads_tickers)
-        )
-    return data
+        return data
+
+    finally:
+        download_progress_placeholder.empty()  # Remove blue progress box

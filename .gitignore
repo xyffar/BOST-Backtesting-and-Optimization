@@ -12,3 +12,7 @@ time_logs.xlsx
 profiles/
 assets/
 outputs/
+variabile_debug.pkl
+debug_notebook.ipynb
+.qodo
+experiments.ipynb

@@ -1,18 +1,18 @@
 # strategies/strategy_rsi.py
 
-from typing import Any, Callable, Dict, List, Optional  # Added List, Dict
+from collections.abc import Callable  # Added List, Dict
+from typing import Any, ClassVar
 
 import numpy as np
 import pandas as pd
 import pandas_ta as ta
-from backtesting import Strategy
-from backtesting.lib import crossover
 
 from strategies.common_strategy import CommonStrategy  # Importa la strategia base
 
 
 # La strategia basata sull'RSI
 class RsiDivergenceStrategy(CommonStrategy):
+    """A strategy that trades on RSI-price divergences."""
     # Parametri specifici per questa strategia
     rsi_period: int = 14
     divergence_lookback: int = 5  # Quante barre indietro controllare per la divergenza
@@ -23,12 +23,10 @@ class RsiDivergenceStrategy(CommonStrategy):
     DISPLAY_NAME = "RSI Divergence"
 
     # Vincolo di ottimizzazione: oversold_level deve essere minore di overbought_level
-    optimization_constraint: Optional[Callable[[pd.Series], bool]] = (
-        lambda s: s.oversold_level < s.overbought_level
-    )
+    optimization_constraint: Callable[[pd.Series], bool] | None = lambda s: s.oversold_level < s.overbought_level
 
     # Definizione dei parametri per la UI e l'ottimizzazione
-    PARAMS_INFO: List[Dict[str, Any]] = [
+    PARAMS_INFO: ClassVar[list[dict[str, Any]]] = [
         {
             "name": "rsi_period",
             "type": int,
@@ -71,7 +69,7 @@ class RsiDivergenceStrategy(CommonStrategy):
         },
         # SL/TP parameters
         {
-            "name": "sl_percent",
+            "name": "sl_pct",
             "type": float,
             "default": 0.05,
             "lowest": 0.00,
@@ -81,7 +79,7 @@ class RsiDivergenceStrategy(CommonStrategy):
             "step": 0.005,
         },
         {
-            "name": "tp_percent",
+            "name": "tp_pct",
             "type": float,
             "default": 0.00,
             "lowest": 0.00,
@@ -93,18 +91,15 @@ class RsiDivergenceStrategy(CommonStrategy):
     ]
 
     def init(self) -> None:
-        """
-        Inizializza la strategia calcolando l'RSI.
-        """
-        CloseSeries: pd.Series = pd.Series(self.data.Close)
-        self.rsi = self.I(ta.rsi, CloseSeries, self.rsi_period)
+        """Initialize the strategy by calculating the RSI."""
+        close_series: pd.Series = pd.Series(self.data.Close)
+        self.rsi = self.I(ta.rsi, close_series, self.rsi_period)
 
     def next(self) -> None:
-        """
-        Implementa la logica di trading basata sull'RSI.
-        Permette solo posizioni LONG.
-        """
+        """Implement the trading logic based on RSI-price divergence.
 
+        This method allows for LONG positions only.
+        """
         # Assicurati di avere abbastanza barre per il lookback e che l'RSI sia calcolato
         if len(self.data.Close) <= self.divergence_lookback or np.isnan(self.rsi[-1]):
             return
@@ -125,15 +120,9 @@ class RsiDivergenceStrategy(CommonStrategy):
         # Logica di entrata:
         # Se non c'è una posizione aperta e c'è un segnale di acquisto, apri una posizione LONG.
         if not self.position:
-            if (
-                current_close < previous_close_lookback
-                and current_rsi > previous_rsi_lookback
-            ):
+            if current_close < previous_close_lookback and current_rsi > previous_rsi_lookback:
                 self._buy_long()  # Usa il metodo helper dalla classe base
         # Logica di uscita:
         # Se c'è una posizione aperta e c'è un segnale di chiusura, chiudi la posizione.
-        elif (
-            current_close > previous_close_lookback
-            and current_rsi < previous_rsi_lookback
-        ):
+        elif current_close > previous_close_lookback and current_rsi < previous_rsi_lookback:
             self._close_position()  # Usa il metodo helper dalla classe base

@@ -8,9 +8,9 @@ import pandas as pd
 import streamlit as st
 from backtesting import Backtest
 
-from src.calcs.monte_carlo import run_montecarlo
+from src.calcs.monte_carlo import add_montecarlo_stats
 from src.config.config import MESSAGES, ss, streamlit_obj
-from src.data_handlers.data_handler import download_data, get_sp500_data
+from src.data_handlers.data_handler import DownloadedDataError, MissingColumnError, download_data, get_sp500_data
 from src.data_handlers.excel_exporter import log_execution_data
 from src.ui_components.display_results import show_montecarlo_equity_lines, show_montecarlo_histogram
 from src.utils.utils import reset_ss_values_for_backtest_results
@@ -18,7 +18,7 @@ from strategies.buy_and_hold_strategy import BuyAndHoldStrategy
 from strategies.common_strategy import CommonStrategy
 
 
-def compare_with_benchmark(strategy_stats: pd.Series, benchmark_stats: pd.Series | None) -> pd.DataFrame:
+def compare_with_benchmark(strategy_stats: pd.Series, benchmark_stats: pd.Series) -> pd.DataFrame:
     """Compare strategy performance metrics against a benchmark.
 
     Creates a DataFrame for a side-by-side comparison of key performance
@@ -91,8 +91,7 @@ def compare_with_benchmark(strategy_stats: pd.Series, benchmark_stats: pd.Series
         }
     )
     comparison_df.set_index("Metrica", inplace=True)
-    if comparison_df is not None:
-        styled_comparison_df = comparison_df.copy()
+    styled_comparison_df = comparison_df.copy()
     for col in styled_comparison_df.select_dtypes(include=np.number).columns:
         styled_comparison_df[col] = styled_comparison_df[col].round(2)
 
@@ -106,7 +105,7 @@ def run_backtest(
     params: dict,
     initial_capital: float,
     commission_percent: float,
-    is_plot_wanted: bool = True,
+    is_plot_wanted: bool = False,
 ) -> None:
     """Execute a backtest for a single ticker using the specified strategy and parameters.
 
@@ -157,6 +156,11 @@ def run_backtest(
     try:
         start_time = time.perf_counter()
         ss.bt_stats[ticker] = bt.run(**params)
+
+        ss.bt_stats[ticker] = ss.bt_stats[ticker].apply(
+            lambda x: f"{x.total_seconds() / (24 * 60 * 60)} days" if isinstance(x, pd.Timedelta) else x
+        )
+
         end_time = time.perf_counter()
         pars_time_log = {"periods": len(data), "strategy": strat_class.DISPLAY_NAME}
         log_execution_data(start_time, end_time, action="Backtest", **pars_time_log)
@@ -182,12 +186,32 @@ def run_backtest(
         return
 
 
+class BenchmarkBacktestError(Exception):
+    """Custom exception for errors during benchmark backtesting."""
+
+    def __init__(self, message: str | None = None) -> None:
+        """Initialize the BenchmarkBacktestError with an optional error message.
+
+        This constructor sets the error message for the custom benchmark backtest exception.
+
+        Args:
+            message (str | None): An optional error message describing the exception.
+
+        """
+        self.message = message
+
+
 def get_benchmark_data(
+    start_date: str,
+    end_date: str,
+    interval: str,
+    initial_capital: float,
+    commission_percent: float,
     download_progress_placeholder: streamlit_obj,
     download_success_placeholder: streamlit_obj,
     successful_downloads_tickers: list,
     failed_downloads_tickers: list,
-) -> pd.Series | None:
+) -> pd.Series:
     """Download S&P500 data and run a Buy & Hold backtest on it to serve as a benchmark.
 
     This function handles the data download process and the subsequent backtest
@@ -203,13 +227,12 @@ def get_benchmark_data(
                                          failed data downloads.
 
     Returns:
-        pd.Series or None: Statistics of the Buy & Hold benchmark backtest
-                           (output of `Backtest.run()`). Returns None if data
-                           download or backtest execution fails.
+        pd.Series: Statistics of the Buy & Hold benchmark backtest
+                           (output of `Backtest.run()`).
 
     """
-    benchmark_raw_data = None  # Raw benchmark data
-    benchmark_stats = None  # Complete benchmark buy&hold statistics
+    # benchmark_raw_data = None  # Raw benchmark data
+    # benchmark_stats = None  # Complete benchmark buy&hold statistics
 
     # Download benchmark data
     download_progress_placeholder.info(
@@ -217,14 +240,16 @@ def get_benchmark_data(
             SP500_TICKER=MESSAGES["general_settings"]["sp500_ticker"]
         )
     )
-    benchmark_raw_data, status, msg = get_sp500_data(ss.start_date_wid, ss.end_date_wid, ss.data_interval_wid)
-    download_progress_placeholder.empty()  # Remove blue progress box
+    try:
+        benchmark_raw_data = get_sp500_data(start_date, end_date, interval)
 
-    if status != "success":
+    except (DownloadedDataError, MissingColumnError) as e:
+        download_progress_placeholder.empty()  # Remove blue progress box
         failed_downloads_tickers.append(MESSAGES["general_settings"]["sp500_ticker"])
         st.warning(MESSAGES["display_texts"]["messages"]["benchmark_data_not_available"])
-        return benchmark_stats
+        raise e
 
+    download_progress_placeholder.empty()  # Remove blue progress box
     successful_downloads_tickers.append(MESSAGES["general_settings"]["sp500_ticker"])
     download_success_placeholder.success(
         MESSAGES["display_texts"]["messages"]["download_success_benchmark"].format(
@@ -233,23 +258,25 @@ def get_benchmark_data(
     )
 
     # Run a backtest with BuyAndHold strategy on the benchmark
-    if benchmark_raw_data is not None and not benchmark_raw_data.empty:
-        try:
-            bt_benchmark = Backtest(
-                benchmark_raw_data,
-                BuyAndHoldStrategy,  # Use the BuyAndHold strategy
-                cash=ss.initial_capital_wid,
-                commission=ss.commission_percent_wid / 100,  # Apply commissions to benchmark too for parity
-                exclusive_orders=True,
-            )
-            benchmark_stats = bt_benchmark.run()
-        except Exception as e:
-            st.warning(
-                MESSAGES["display_texts"]["messages"]["error_calculating_benchmark_stats"].format(
-                    SP500_TICKER=MESSAGES["general_settings"]["sp500_ticker"], e=e
-                )
-            )
-            benchmark_stats = None
+    try:
+        bt_benchmark = Backtest(
+            benchmark_raw_data,
+            BuyAndHoldStrategy,  # Use the BuyAndHold strategy
+            cash=initial_capital,
+            commission=commission_percent,  # Apply commissions to benchmark too for parity
+            exclusive_orders=True,
+        )
+        benchmark_stats = bt_benchmark.run()
+        # benchmark_stats = benchmark_stats.apply(
+        #     lambda x: f"{x.total_seconds() / (24 * 60 * 60)} days" if isinstance(x, pd.Timedelta) else x
+        # )
+    except Exception as e:
+        error_message = MESSAGES["display_texts"]["messages"]["error_calculating_benchmark_stats"].format(
+            SP500_TICKER=MESSAGES["general_settings"]["sp500_ticker"], e=e
+        )
+        st.warning(error_message)
+        raise BenchmarkBacktestError(error_message) from e
+
     return benchmark_stats
 
 
@@ -305,12 +332,21 @@ def start_backtest_process(
             download_fail_placeholder = st.empty()
             run_fail_placeholder = st.empty()  # For backtest/optimization success/failure messages
 
-    benchmark_stats = get_benchmark_data(
-        download_progress_placeholder,
-        download_success_placeholder,
-        ss.successful_downloads_tickers,
-        ss.failed_downloads_tickers,
-    )
+    try:
+        benchmark_stats = get_benchmark_data(
+            start_date=ss.start_date_wid,
+            end_date=ss.end_date_wid,
+            interval=ss.data_interval_wid,
+            initial_capital=ss.initial_capital_wid,
+            commission_percent=ss.commission_percent_wid / 100,
+            download_progress_placeholder=download_progress_placeholder,
+            download_success_placeholder=download_success_placeholder,
+            successful_downloads_tickers=ss.successful_downloads_tickers,
+            failed_downloads_tickers=ss.failed_downloads_tickers,
+        )
+    except (DownloadedDataError, MissingColumnError, BenchmarkBacktestError) as e:
+        st.warning(f"{e}")
+        return
 
     with backtest_infos_container:
         progress_bar = st.progress(0)
@@ -339,7 +375,7 @@ def start_backtest_process(
 def process_single_ticker(
     ticker: str,
     i: int,
-    benchmark_stats: pd.Series | None,
+    benchmark_stats: pd.Series,
     download_progress_placeholder: streamlit_obj,
     download_success_placeholder: streamlit_obj,
     download_fail_placeholder: streamlit_obj,
@@ -402,18 +438,21 @@ def process_single_ticker(
         )
     )
 
-    data, status, _ = download_data(ticker, ss.start_date_wid, ss.end_date_wid, ss.data_interval_wid)
-
-    download_progress_placeholder.empty()  # Remove blue progress box
-
-    _update_download_status(
-        status,
-        ticker,
-        successful_downloads_tickers,
-        failed_downloads_tickers,
-        download_success_placeholder,
-        download_fail_placeholder,
-    )
+    try:
+        data = download_data(ticker, ss.start_date_wid, ss.end_date_wid, ss.data_interval_wid)
+    except (DownloadedDataError, MissingColumnError):
+        download_progress_placeholder.empty()  # Remove blue progress box
+        failed_downloads_tickers.append(ticker)
+        download_fail_placeholder.error(
+            MESSAGES["display_texts"]["messages"]["download_failed_ticker"] + ", ".join(failed_downloads_tickers)
+        )
+        return
+    else:
+        download_progress_placeholder.empty()  # Remove blue progress box
+        successful_downloads_tickers.append(ticker)
+        download_success_placeholder.success(
+            MESSAGES["display_texts"]["messages"]["download_success_ticker"] + ", ".join(successful_downloads_tickers)
+        )
 
     if data is not None:
         run_progress_placeholder.info(MESSAGES["display_texts"]["messages"]["execution_in_progress"] + ticker)
@@ -425,40 +464,31 @@ def process_single_ticker(
                 ss.bt_params,
                 ss.initial_capital_wid,
                 ss.commission_percent_wid / 100,
-                True,
+                is_plot_wanted=True,
             )
-            run_status = "success"
         except Exception:
-            run_status = "fail"
-        run_progress_placeholder.empty()
-    else:
-        run_status = "fail"
+            run_progress_placeholder.empty()
+            failed_runs_tickers.append(ticker)
+            run_fail_placeholder.error(
+                MESSAGES["display_texts"]["messages"]["execution_failed"] + ", ".join(failed_runs_tickers)
+            )
+            return
 
-    _update_run_status(
-        run_status,
-        ticker,
-        successful_runs_tickers,
-        failed_runs_tickers,
-        run_success_placeholder,
-        run_fail_placeholder,
-    )
+        run_progress_placeholder.empty()
+        successful_runs_tickers.append(ticker)
+        run_success_placeholder.success(
+            MESSAGES["display_texts"]["messages"]["execution_completed"] + ", ".join(successful_runs_tickers)
+        )
 
     if ticker not in ss.bt_stats.keys() or ss.bt_stats[ticker] is None:
         return
 
-    if benchmark_stats is not None:
-        ss.backtest_comp_with_benchmark_df[ticker] = compare_with_benchmark(ss.bt_stats[ticker], benchmark_stats)
+    ss.backtest_comp_with_benchmark_df[ticker] = compare_with_benchmark(ss.bt_stats[ticker], benchmark_stats)
 
     progress_bar.progress((i + 1) / len(ss.tickers))
 
-    if (
-        ss.run_mc_wid
-        and data is not None
-        and run_status == "success"
-        and ss.backtest_trade_list[ticker] is not None
-        and ss.bt_stats[ticker] is not None
-    ):
-        run_montecarlo(
+    if ss.run_mc_wid and ss.backtest_trade_list[ticker] is not None and ss.bt_stats[ticker] is not None:
+        add_montecarlo_stats(
             ticker=ticker,
             trades=(ss.backtest_trade_list[ticker]["ReturnPct"]),
             original_stats=ss.bt_stats[ticker],

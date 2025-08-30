@@ -6,7 +6,7 @@ import inspect
 import math  # Import math for floor function
 import os  # Import the os module
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from copy import deepcopy
 from typing import Any
@@ -34,24 +34,24 @@ def parse_date(date_string: str) -> dt.date:
     return dt.datetime.strptime(date_string, "%d/%m/%Y").date()  # Expected format dd/mm/yyyy
 
 
-# New functions for mode switching and subheader display
-def set_backtest_mode() -> None:
-    """Set the application mode to backtest.
+# # New functions for mode switching and subheader display
+# def set_backtest_mode() -> None:
+#     """Set the application mode to backtest.
 
-    Updates the Streamlit session state to indicate backtest mode.
-    """
-    ss.mode = "backtest"
-
-
-def set_optimization_mode() -> None:
-    """Set the application mode to optimization.
-
-    Updates the Streamlit session state to indicate optimization mode.
-    """
-    ss.mode = "optimization"
+#     Updates the Streamlit session state to indicate backtest mode.
+#     """
+#     ss.mode = "backtest"
 
 
-def calculate_optimization_combinations(opt_params_ranges: dict[str:Any]) -> int:
+# def set_optimization_mode() -> None:
+#     """Set the application mode to optimization.
+
+#     Updates the Streamlit session state to indicate optimization mode.
+#     """
+#     ss.mode = "optimization"
+
+
+def calculate_optimization_combinations(opt_params_ranges: dict[str, Any]) -> int:
     """Calculate the total number of parameter combinations for optimization.
 
     Args:
@@ -89,7 +89,7 @@ def calculate_optimization_combinations(opt_params_ranges: dict[str:Any]) -> int
 
 
 # @st.cache_resource
-def load_strategies() -> dict[str, type[CommonStrategy]]:
+def load_strategies() -> dict[str, type[CommonStrategy] | type[Strategy]]:
     """Find and dynamically load all strategy classes inheriting from CommonStrategy.
 
     Searches Python files in the same directory starting with 'strategy_'. Returns a dictionary mapping each strategy's DISPLAY_NAME to its class.
@@ -106,7 +106,7 @@ def load_strategies() -> dict[str, type[CommonStrategy]]:
         if (
             filename.startswith("strategy_")
             and filename.endswith(".py")
-            and filename != MESSAGES.get("general_settings").get("base_strategy_filename")
+            and filename != MESSAGES.get("general_settings", {}).get("base_strategy_filename")
         ):
             module_name: str = (
                 MESSAGES["general_settings"]["folder_strategies"] + "." + filename[:-3]
@@ -125,8 +125,9 @@ def load_strategies() -> dict[str, type[CommonStrategy]]:
                         and obj != Strategy
                         and issubclass(obj, (CommonStrategy, Strategy))
                     ):
-                        if hasattr(obj, "DISPLAY_NAME") and isinstance(obj.DISPLAY_NAME, str):
-                            strategies[obj.DISPLAY_NAME] = obj
+                        display_name = getattr(obj, "DISPLAY_NAME", None)
+                        if isinstance(display_name, str) and display_name is not None:
+                            strategies[display_name] = obj
                         else:
                             print(
                                 f"Warning: The strategy '{name}' in module '{module_name}' does not have a valid 'DISPLAY_NAME' attribute. It will be ignored."
@@ -135,30 +136,37 @@ def load_strategies() -> dict[str, type[CommonStrategy]]:
                 print(f"Errore durante il caricamento della strategia dal file '{filename}': {e}")
 
     # Ordina le strategie per nome visualizzato per un menu a tendina pulito
-    sorted_strategies: dict[str, type[CommonStrategy]] = dict(sorted(strategies.items()))
+    sorted_strategies: dict[str, type[CommonStrategy] | type[Strategy]] = dict(sorted(strategies.items()))
     return sorted_strategies
 
 
 def list_varying_params(all_combs: pd.DataFrame) -> list[tuple[int, str]]:
-    """Return the names of parameters that varied across optimization combinations.
+    """Get the indices and names of the parameters that vary in the optimization results.
 
-    Takes the DataFrame of all optimization combinations and returns the names of parameters with at least two unique values.
+    Args:
+        all_combs (pd.DataFrame): The optimization results DataFrame.
 
     Returns:
-        list: A list of parameter names.
+        list[tuple[int, str]]: A list of tuples containing the index and name of the varying parameters.
 
     """
-    varying_param_columns = []
-    varying_param_columns.extend(
-        (idx, col) for idx, col in enumerate(all_combs.columns) if all_combs[col].nunique() > 1
-    )
-    return varying_param_columns
+    # Transform the 'Param Values' column into a list of lists
+    col_param_values = all_combs[("Strategy", "Param Values")].apply(list)
+
+    # Transform the list of lists into a list of tuples
+    col_param_values = list(zip(*col_param_values, strict=False))
+
+    # Find the indices that remain unchanged
+    unchanged_indices = [i for i, t in enumerate(col_param_values) if len(set(t)) == 1]
+
+    # Get the names of the varying parameters
+    param_names = all_combs[("Strategy", "Param Names")].iloc[0]
+    return [(idx, name) for idx, name in enumerate(param_names) if idx not in unchanged_indices]
 
 
 def add_benchmark_comparison(
     optimization_heatmap_df: pd.DataFrame,
-    benchmark_comparison: float | int,
-    obj_func: str | None = None,
+    benchmark_comparison: pd.Series,
 ) -> pd.DataFrame:
     """Add benchmark comparison columns to the optimization heatmap DataFrame.
 
@@ -173,13 +181,69 @@ def add_benchmark_comparison(
         pd.DataFrame: DataFrame with added 'Benchmark' and 'Var. [%]' columns.
 
     """
+    # This is the df containing the optimization results\
     df_with_benchmark = optimization_heatmap_df.copy()
-    df_with_benchmark = df_with_benchmark.drop("Trade_returns", axis=1)
-    df_with_benchmark["Benchmark"] = benchmark_comparison
-    df_with_benchmark["Var. [%]"] = (
-        100 * (df_with_benchmark[obj_func] - df_with_benchmark["Benchmark"]) / df_with_benchmark["Benchmark"]
-    )
+    # These are the stats available in the software
+    all_available_stats: list = [stat["name"] for stat in MESSAGES["all_stats_properties"]]
+
+    # 1. Transform the series of benchmark stats into a DataFrame --------------------------------
+    benchmark_df = _transform_benchmark_to_df(benchmark_comparison, df_with_benchmark, all_available_stats)
+
+    # 2. Add the benchmark stats to the dataframe --------------------------------
+    df_with_benchmark[benchmark_df.columns] = benchmark_df
+
+    # 3. Calculate the difference between the results and the benchmark --------------------
+    return _add_benchmark_comparison(df_with_benchmark, benchmark_df)
+
+
+def _add_benchmark_comparison(df_with_benchmark: pd.DataFrame, benchmark_df: pd.DataFrame) -> pd.DataFrame:
+    stats_for_comparison = [col[1] for col in benchmark_df.columns]  # Get the stats to compare with the benchmark
+
+    result_columns = df_with_benchmark[
+        [("BT Stats", col) for col in stats_for_comparison]
+    ]  # Select the columns to compare with the benchmark
+    result_columns.columns = result_columns.columns.droplevel(0)  # Remove the "BT Stats" level from the column names
+
+    benchmark_columns = df_with_benchmark[
+        [("Benchmark Stats", col) for col in stats_for_comparison]
+    ]  # Select the columns to compare with the results
+    benchmark_columns.columns = benchmark_columns.columns.droplevel(
+        0
+    )  # Remove the "Benchmark Stats" level from the column names
+
+    # Calculate the percentage difference, handling division by zero
+    numerator = result_columns - benchmark_columns
+    denominator = benchmark_columns.abs()
+
+    # Replace 0 in the denominator with NaN to avoid division by zero errors
+    diff_pct = (numerator / denominator.replace(0, np.nan)) * 100
+
+    diff_pct = diff_pct.fillna(0)
+
+    diff_pct.columns = pd.MultiIndex.from_tuples(
+        [("Bench. Comp. [%]", col) for col in diff_pct.columns]
+    )  # Add a "Bench. Comp. [%]" level to the column names
+
+    df_with_benchmark[diff_pct.columns] = diff_pct  # Add the percentage difference to the DataFrame
+
     return df_with_benchmark
+
+
+def _transform_benchmark_to_df(
+    benchmark_comparison: pd.Series, df_rankings: pd.DataFrame, all_available_stats: list
+) -> pd.DataFrame:
+    benchmark_df = pd.DataFrame(benchmark_comparison.dropna()).T  # Make a series into a 1-row DataFrame
+    benchmark_df = benchmark_df[
+        [col for col in benchmark_df.columns if col in all_available_stats]
+    ]  # Filter columns to only those available in the software
+    benchmark_df.columns = pd.MultiIndex.from_tuples(
+        [("Benchmark Stats", col) for col in benchmark_df.columns]
+    )  # Add a "Benchmark Stats" level to the column names
+    benchmark_df = pd.concat(
+        [benchmark_df] * len(df_rankings), ignore_index=True
+    )  # Copy the rows as many times as the rows of the dataframe of results
+
+    return benchmark_df
 
 
 def calculate_total_returns(equity_line: np.ndarray, initial_capital: float) -> float:
@@ -226,7 +290,7 @@ def calculate_sharpe_ratio(trade_returns: np.ndarray, risk_free_rate: float = 0.
         return 0.0  # Requires at least 2 trades for standard deviation
     mean_return = np.mean(trade_returns)
     std_return = np.std(trade_returns)
-    return 0.0 if std_return == 0 else (mean_return - risk_free_rate) / std_return
+    return 0.0 if std_return == 0 else float((mean_return - risk_free_rate) / std_return)
 
 
 def calculate_sortino_ratio(trade_returns: np.ndarray, risk_free_rate: float = 0.0) -> float:
@@ -305,7 +369,7 @@ class OptimizationRecorder:
 @contextmanager
 def record_all_optimizations(
     backtest_instance: backtesting.Backtest,
-) -> OptimizationRecorder:  # type: ignore
+) -> Generator[OptimizationRecorder]:
     """Context manager to record all optimization results for a backtest instance.
 
     Temporarily replaces the run method of the backtest instance to record results for each run, then restores the original method.
@@ -313,20 +377,21 @@ def record_all_optimizations(
     Args:
         backtest_instance (backtesting.Backtest): The backtest instance whose run method will be wrapped.
 
-    Returns:
+    Yields:
         OptimizationRecorder: Recorder object containing all recorded results.
 
     """
     recorder = OptimizationRecorder()
     original_run: Callable = backtest_instance.run
 
-    def recording_run(*args, **kwargs) -> object:  # noqa: ANN002, ANN003
+    def recording_run(*args, **kwargs) -> pd.Series:  # noqa: ANN002, ANN003
         try:
             stats = original_run(*args, **kwargs)
             recorder.record(stats, kwargs)
             return stats
         except Exception as e:
-            return f"Exception while recording result of backtesting run: {e}"
+            st.error(f"Exception while recording result of backtesting run: {e}")
+            raise e
 
     # Temporarily replace the run method
     backtest_instance.run = recording_run
@@ -354,7 +419,8 @@ def _update_session_state_from_config(filter_func: Callable[[str, tuple], bool])
     updates_to_make = {
         name: deepcopy(config[0]) for name, config in session_state_names.items() if filter_func(name, config)
     }
-    ss.update(updates_to_make)
+    for key, value in updates_to_make.items():
+        ss[key] = value
 
 
 def initialize_session_states() -> None:

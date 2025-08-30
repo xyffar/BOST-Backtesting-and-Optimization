@@ -6,14 +6,227 @@ general_settings:
   initial_capital: 10000.0
   commission_percent: 0.002
   data_intervals:
-    - "1h"
-    - "1d"
-    - "1wk"
-    - "1mo"
+    "1h": 1638 # Ore di trading in un anno (es. 252 giorni * 6.5 ore/giorno)
+    "1d": 252 # Giorni di trading in un anno
+    "1wk": 52 # Settimane in un anno
+    "1mo": 12 # Mesi in un anno
   sp500_ticker: "SPY" # ETF che traccia l'S&P500
   param_columns_opt_mode: 3
   base_strategy_filename: "common_strategy.py"
   folder_output_files: "outputs"
+
+all_stats_properties:
+  - name: "Exposure Time [%]"
+    in_backtesting: false
+    in_monte_carlo: false
+    in_wfo: false
+  - name: "Equity Final [$]"
+    in_backtesting: false
+    in_monte_carlo: false
+    in_wfo: false
+    vector_function: "calculate_equity_final"
+  - name: "Equity Peak [$]"
+    in_backtesting: false
+    in_monte_carlo: false
+    in_wfo: false
+    vector_function: "calculate_equity_peak"
+  - name: "Commissions [$]"
+    in_backtesting: false
+    in_monte_carlo: false
+    in_wfo: false
+  - name: "Return [%]"
+    nickname: "Ret [%]"
+    in_backtesting: true
+    in_monte_carlo: true
+    opt_main_stat: true
+    in_wfo: true
+    vector_function: "calculate_total_return" # Funzione per ritorno totale
+  - name: "Buy & Hold Return [%]"
+    in_backtesting: false
+    in_monte_carlo: false
+    in_wfo: false
+  - name: "Return (Ann.) [%]"
+    in_backtesting: false
+    in_monte_carlo: false
+    in_wfo: false
+  - name: "Volatility (Ann.) [%]"
+    in_backtesting: false
+    in_monte_carlo: false
+    in_wfo: false
+    vector_function: "calculate_annualized_volatility"
+  - name: "CAGR [%]"
+    in_backtesting: false
+    in_monte_carlo: true
+    opt_main_stat: true
+    in_wfo: false
+    vector_function: "calculate_cagr"
+  - name: "Sharpe Ratio"
+    nickname: "Sharpe"
+    in_backtesting: true
+    in_monte_carlo: true
+    opt_main_stat: true
+    in_wfo: true
+    vector_function: "calculate_sharpe_ratio"
+  - name: "Sortino Ratio"
+    nickname: "Sortino"
+    in_backtesting: true
+    in_monte_carlo: true
+    opt_main_stat: true
+    in_wfo: true
+    vector_function: "calculate_sortino_ratio"
+  - name: "Calmar Ratio"
+    nickname: "Calmar"
+    in_backtesting: false
+    in_monte_carlo: false
+    opt_main_stat: true
+    in_wfo: false
+    vector_function: "calculate_calmar_ratio"
+  - name: "Alpha [%]"
+    in_backtesting: true
+    in_monte_carlo: false
+    in_wfo: false
+    vector_function: "calculate_alpha_beta" # Funzione per Alpha e Beta
+    result_index: 0 # Prende il primo elemento della tupla (Alpha)
+  - name: "Beta"
+    in_backtesting: true
+    in_monte_carlo: false
+    in_wfo: false
+    vector_function: "calculate_alpha_beta" # Anche questa usa la funzione per Alpha e Beta
+    result_index: 1 # Prende il secondo elemento della tupla (Beta)
+  - name: "Max. Drawdown [%]"
+    nickname: "Max DD [%]"
+    in_backtesting: true
+    in_monte_carlo: true
+    opt_main_stat: true
+    in_wfo: true
+    vector_function: "calculate_max_drawdown"
+  - name: "Avg. Drawdown [%]"
+    nickname: "Avg DD [%]"
+    in_backtesting: false
+    in_monte_carlo: false
+    in_wfo: false
+  - name: "Max. Drawdown Duration"
+    in_backtesting: true
+    in_monte_carlo: false
+    in_wfo: false
+  - name: "Avg. Drawdown Duration"
+    in_backtesting: false
+    in_monte_carlo: false
+    in_wfo: false
+  - name: "# Trades"
+    in_backtesting: true
+    in_monte_carlo: false
+    opt_main_stat: true
+    in_wfo: false
+  - name: "Win Rate [%]"
+    in_backtesting: true
+    in_monte_carlo: false
+    opt_main_stat: true
+    in_wfo: false
+  - name: "Best Trade [%]"
+    in_backtesting: false
+    in_monte_carlo: false
+    in_wfo: false
+  - name: "Worst Trade [%]"
+    in_backtesting: false
+    in_monte_carlo: false
+    in_wfo: false
+  - name: "Avg. Trade [%]"
+    in_backtesting: false
+    in_monte_carlo: false
+    in_wfo: false
+  - name: "Max. Trade Duration"
+    in_backtesting: false
+    in_monte_carlo: false
+    in_wfo: false
+  - name: "Avg. Trade Duration"
+    in_backtesting: false
+    in_monte_carlo: false
+    in_wfo: false
+  - name: "Profit Factor"
+    in_backtesting: false
+    in_monte_carlo: false
+    in_wfo: false
+  - name: "Expectancy [%]"
+    in_backtesting: false
+    in_monte_carlo: false
+    in_wfo: false
+  - name: "SQN"
+    in_backtesting: true
+    in_monte_carlo: true
+    opt_main_stat: true
+    in_wfo: true
+  - name: "Kelly Criterion"
+    nickname: "Kelly"
+    in_backtesting: false
+    in_monte_carlo: false
+    opt_main_stat: true
+    in_wfo: false
+
+# available_stats:
+#   - "Exposure Time [%]"
+#   - "Equity Final [$]"
+#   - "Equity Peak [$]"
+#   - "Commissions [$]"
+#   - "Return [%]"
+#   - "Buy & Hold Return [%]"
+#   - "Return (Ann.) [%]"
+#   - "Volatility (Ann.) [%]"
+#   - "CAGR [%]"
+#   - "Sharpe Ratio"
+#   - "Sortino Ratio"
+#   - "Calmar Ratio"
+#   - "Alpha [%]"
+#   - "Beta"
+#   - "Max. Drawdown [%]"
+#   - "Avg. Drawdown [%]"
+#   - "Max. Drawdown Duration"
+#   - "Avg. Drawdown Duration"
+#   - "# Trades"
+#   - "Win Rate [%]"
+#   - "Best Trade [%]"
+#   - "Worst Trade [%]"
+#   - "Avg. Trade [%]"
+#   - "Max. Trade Duration"
+#   - "Avg. Trade Duration"
+#   - "Profit Factor"
+#   - "Expectancy [%]"
+#   - "SQN"
+#   - "Kelly Criterion"
+
+# stats_of_interest_backtesting:
+#   - "Return [%]"
+#   - "Sharpe Ratio"
+#   - "Sortino Ratio"
+#   - "Max. Drawdown [%]"
+#   - "Max. Drawdown Duration"
+#   - "Win Rate [%]"
+#   - "# Trades"
+#   - "SQN"
+
+# stats_for_monte_carlo:
+#   - "Return [%]"
+#   - "Max. Drawdown [%]"
+#   - "Sharpe Ratio"
+#   - "Sortino Ratio"
+#   - "SQN"
+
+monte_carlo_percentiles:
+  - 50
+  - 80
+  - 90
+  - 95
+  - 99
+monte_carlo_sampling_methods:
+  - "resampling_con_reimmissione"
+  - "permutazione"
+
+# stats_for_wfo:
+#   - "Return [%]"
+#   - "Max. Drawdown [%]"
+#   - "Sharpe Ratio"
+#   - "Sortino Ratio"
+#   - "SQN"
 
 # --- Impostazioni di Ottimizzazione ---
 optimization_settings:
@@ -88,6 +301,7 @@ display_texts: # Testi visualizzati per gli elementi UI
     select_strategy_to_set_opt_params: "Seleziona una strategia per impostare i parametri di ottimizzazione."
     table_combinations_header: "Tabella delle Combinazioni di Parametri e Valori Obiettivo"
     mc_negative_sim_length_warning: "La lunghezza della simulazione Monte Carlo deve essere non negativa."
+    invalid_wfo_params: "I parametri WFO non sono validi. Numer cicli = {n_cycles}, rapporto OOS = {oos_ratio}, dimensione dataframe = {combinations_df_len}, nomi indici = {index_names}"
     mc_permutation_length_info: "Per il campionamento 'permutazione', la lunghezza della simulazione non può essere >= al numero di trade storici ({num_trades}). La lunghezza è stata adattata a {adjusted_length}."
     best_params_found: "Migliori Parametri Trovati"
     stats_best_combination: "Statistiche della Migliore Combinazione"
@@ -110,6 +324,7 @@ display_texts: # Testi visualizzati per gli elementi UI
     mc_empty_trades_error: "L'analisi Monte Carlo non può essere eseguita: la lista dei rendimenti dei trade è vuota."
     mc_invalid_sampling_method: "Metodo di campionamento non valido: '{method}'. Usa 'resampling_con_reimmissione' o 'permutazione'."
     mc_running_for_comb: "Esecuzione Monte Carlo per {ticker} (combinazione {i}/{total})"
+    details_for_ticker: "Dettagli per {ticker}"
   data_handler:
     no_data_found: "Nessun dato trovato per {ticker} con il range e l'intervallo specificati."
     required_columns_missing: "Colonne richieste (Open, High, Low, Close, Volume) mancanti per {ticker}."

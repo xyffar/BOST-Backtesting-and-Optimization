@@ -1,3 +1,5 @@
+from collections.abc import Sequence
+
 import streamlit as st
 
 from src.calcs.backtest_runner import start_backtest_process
@@ -70,7 +72,7 @@ def render_backtest_settings() -> None:
         with cols[2]:
             mc_sampling_method = st.selectbox(
                 display_texts.get("mc_sampling_method_label", "Sampling Method"),
-                options=["resampling_con_reimmissione", "permutazione"],
+                options=MESSAGES.get("monte_carlo_sampling_methods", []),
                 help=display_texts.get(
                     "mc_sampling_method_help", "Bootstrap resampling is typically preferred for future scenarios."
                 ),
@@ -88,7 +90,7 @@ def render_backtest_settings() -> None:
 
         with cols[4]:
             # The simulation length is only relevant for the resampling method.
-            is_resampling = mc_sampling_method == "resampling_con_reimmissione"
+            is_resampling = mc_sampling_method == MESSAGES.get("monte_carlo_sampling_methods", [])[0]
             st.number_input(
                 display_texts.get("mc_sim_length_label", "# Trades per Simulation"),
                 value=0,
@@ -132,7 +134,7 @@ def make_body_backtesting_mode() -> None:
             key="run_backtest_button_wid",
             type="primary",
             on_click=start_backtest_process,
-            args=[infos_container, results_container],
+            args=(infos_container, results_container),
             # use_container_width=True,
         )
 
@@ -143,7 +145,7 @@ def make_body_backtesting_mode() -> None:
         display_results(mode="backtest")
 
 
-def _render_param_widget(param_def: dict) -> any:
+def _render_param_widget(param_def: dict) -> int | float | Sequence:
     """Render a single Streamlit widget based on a parameter definition.
 
     This helper function selects and configures the appropriate Streamlit input
@@ -166,8 +168,8 @@ def _render_param_widget(param_def: dict) -> any:
     display_texts = MESSAGES.get("display_texts", {})
 
     display_name = param_name.replace("_", " ").title()
-    if param_name in ["sl_percent", "tp_percent"]:
-        display_name = display_name.replace("Percent", "(%)")
+    if param_name in ["sl_pct", "tp_pct"]:
+        display_name = display_name.replace("Pct", "(%)")
 
     key = f"param_{param_name}"
 
@@ -187,7 +189,7 @@ def _render_param_widget(param_def: dict) -> any:
         )
 
     if isinstance(param_type, float):
-        is_percentage = param_name in ["sl_percent", "tp_percent"]
+        is_percentage = param_name in ["sl_pct", "tp_pct"]
         multiplier = 100.0 if is_percentage else 1.0
 
         widget_value = st.number_input(

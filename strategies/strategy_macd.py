@@ -1,10 +1,10 @@
 # strategies/strategy_macd.py
 
-from typing import Any, Callable, Dict, List, Optional  # Added List, Dict
+from collections.abc import Callable  # Added List, Dict
+from typing import Any, ClassVar
 
 import pandas as pd
 import pandas_ta as ta
-from backtesting import Strategy
 from backtesting.lib import crossover
 
 from strategies.common_strategy import CommonStrategy  # Importa la strategia base
@@ -12,6 +12,7 @@ from strategies.common_strategy import CommonStrategy  # Importa la strategia ba
 
 # La strategia basata sul MACD
 class MACDStrategy(CommonStrategy):
+    """A simple trading strategy based on the MACD indicator."""
     # Parametri specifici per questa strategia
     n_fast: int = 12
     n_slow: int = 26
@@ -20,12 +21,10 @@ class MACDStrategy(CommonStrategy):
     # Nome per visualizzazione
     DISPLAY_NAME = "MACD"
 
-    optimization_constraint: Optional[Callable[[pd.Series], bool]] = (
-        lambda s: s.n_fast < s.n_slow
-    )
+    optimization_constraint: Callable[[pd.Series], bool] | None = lambda s: s.n_fast < s.n_slow
 
     # Definizione dei parametri per la UI e l'ottimizzazione
-    PARAMS_INFO: List[Dict[str, Any]] = [
+    PARAMS_INFO: ClassVar[list[dict[str, Any]]] = [
         {
             "name": "n_fast",
             "type": int,
@@ -58,7 +57,7 @@ class MACDStrategy(CommonStrategy):
         },
         # SL/TP parameters
         {
-            "name": "sl_percent",
+            "name": "sl_pct",
             "type": float,
             "default": 0.05,
             "lowest": 0.00,
@@ -68,7 +67,7 @@ class MACDStrategy(CommonStrategy):
             "step": 0.005,
         },
         {
-            "name": "tp_percent",
+            "name": "tp_pct",
             "type": float,
             "default": 0.00,
             "lowest": 0.00,
@@ -80,15 +79,13 @@ class MACDStrategy(CommonStrategy):
     ]
 
     def init(self) -> None:
-        """
-        Inizializza la strategia calcolando il MACD.
-        """
-        CloseSeries: pd.Series = pd.Series(self.data.Close)
+        """Initialize the strategy by calculating the MACD indicator."""
+        close_series: pd.Series = pd.Series(self.data.Close)
         # Calcola MACD, MACD_H (histogram) e MACD_S (signal line) usando pandas_ta
         # pandas_ta restituisce una tupla o DataFrame con le colonne nominate, es. MACD_12_26_9, MACDH_12_26_9, MACDS_12_26_9
         self.macd, _, self.signal = self.I(
             ta.macd,
-            CloseSeries,
+            close_series,
             fast=self.n_fast,
             slow=self.n_slow,
             signal=self.n_signal,
@@ -96,9 +93,9 @@ class MACDStrategy(CommonStrategy):
         )
 
     def next(self) -> None:
-        """
-        Implementa la logica di trading basata sul MACD.
-        Permette solo posizioni LONG.
+        """Implement the trading logic based on MACD signals.
+
+        This method allows for LONG positions only.
         """
         # Segnale di acquisto: La linea MACD attraversa al di sopra la linea del segnale
         buy_signal: bool = crossover(self.macd, self.signal)

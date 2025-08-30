@@ -6,8 +6,158 @@ import pandas as pd
 # import quantstats as qs
 import streamlit as st
 
+from src.calcs.quant_metrics import (
+    FUNCTION_MAP,
+)
 from src.config.config import MESSAGES, ss
 from src.data_handlers.excel_exporter import log_execution_data
+
+
+def get_montecarlo_stats(
+    trades: np.ndarray | pd.Series,
+    *,
+    sampling_method: str,
+    sim_length: int,
+    num_sims: int,
+    initial_capital: float,
+    benchmark: pd.Series,
+    data_interval: str = "1d",
+) -> pd.Series:
+    """Calculate Monte Carlo simulation statistics for a series of trades.
+
+    Args:
+        trades: An array or Series of trade returns.
+        sampling_method: The method for sampling trades ('permutazione' or 'resampling_con_reimmissione').
+        sim_length: The number of trades in each simulated path.
+        num_sims: The total number of simulations to run.
+        initial_capital: The starting capital for the simulations.
+        benchmark: The statistics from the benchmark backtest.
+        data_interval: The data interval (e.g., '1d' for daily) for annualization.
+
+    Returns:
+        A pandas Series containing the aggregated Monte Carlo statistics.
+
+    Raises:
+        ValueError: If the list of trade returns is empty.
+
+    """
+    if isinstance(trades, pd.Series):
+        trades = trades.to_numpy()
+
+    messages = MESSAGES.get("display_texts", {}).get("messages", {})
+    # ----------------------------------------------------------
+    if trades is None or trades.size == 0:
+        raise ValueError(
+            messages.get(
+                "mc_empty_trades_error", "Monte Carlo analysis cannot be run: The list of trade returns is empty."
+            )
+        )  # Ensure trades is not None or empty
+
+    sim_length = _adjust_simulation_length(sampling_method, sim_length, len(trades))
+    # ----------------------------------------------------------
+    sampled_returns = _get_shuffled_returns_2darray(trades, sampling_method, sim_length, num_sims)
+    # ----------------------------------------------------------
+    # equity_lines: np.ndarray = np.cumprod(sampled_returns + 1, axis=1) * initial_capital
+    # equity_lines = np.concatenate([np.full((num_sims, 1), initial_capital), equity_lines], axis=1)
+    # ----------------------------------------------------------
+    aggregated_stats_df = _get_all_required_stats(
+        sampled_returns, initial_capital=initial_capital, benchmark=benchmark, data_interval=data_interval
+    )
+
+    return aggregated_stats_df.iloc[0]
+
+
+def _get_all_required_stats(
+    sampled_returns: np.ndarray, *, initial_capital: float, benchmark: pd.Series, data_interval: str = "1d"
+) -> pd.DataFrame:
+    args_for_stats = {
+        "initial_equity": initial_capital,
+        "annualize": False,
+        "annualization_factor": MESSAGES["general_settings"]["data_intervals"][data_interval],
+        "risk_free_rate": 0.0,  # Assuming no risk-free rate for simplicity
+        "benchmark_returns_2d_array": None,  # No benchmark provided in this context
+        "minimum_acceptable_return": 0.0,  # Assuming no minimum acceptable return (for Sortino)
+    }
+    stats_for_montecarlo: dict = {
+        stat["name"]: stat["vector_function"]
+        for stat in MESSAGES.get("all_stats_properties", [])
+        if stat["in_monte_carlo"] and "vector_function" in stat
+    }
+
+    unique_stat_functions: set = set(stats_for_montecarlo.values())
+
+    stats_results: dict = {
+        stat_function: FUNCTION_MAP[stat_function](sampled_returns, **args_for_stats)
+        for stat_function in unique_stat_functions
+    }
+
+    stats_all_sims = {key: stats_results[func] for key, func in stats_for_montecarlo.items()}
+    stats_all_sims_df = pd.DataFrame(stats_all_sims)
+    aggregated_stats_df = pd.DataFrame(
+        {
+            **{"min": stats_all_sims_df.min(), "max": stats_all_sims_df.max()},
+            **{f"p{p}": stats_all_sims_df.quantile(1 - p / 100) for p in MESSAGES["monte_carlo_percentiles"]},
+        }
+    )
+    aggregated_stats_df["P[%]>Bench"] = (
+        stats_all_sims_df.gt(benchmark[list(stats_for_montecarlo.keys())])
+    ).mean() * 100.0
+
+    aggregated_stats_df = aggregated_stats_df.stack().to_frame().T  # type: ignore
+    aggregated_stats_df.columns = aggregated_stats_df.columns.map(lambda x: f"{x[0]} ({x[1]})")
+    aggregated_stats_df.columns = pd.MultiIndex.from_tuples(
+        [("Monte Carlo", col) for col in aggregated_stats_df.columns]
+    )
+
+    return aggregated_stats_df  # Return the first row as a Series (needed for .apply()).
+
+
+def _get_shuffled_returns_2darray(
+    trades: np.ndarray | pd.Series, sampling_method: str, sim_length: int, num_sims: int
+) -> np.ndarray:
+    """Generate a 2D array of sampled trade returns for Monte Carlo simulations.
+
+    Parameters
+    ----------
+    trades : np.ndarray | pd.Series
+        Array or Series of trade returns to sample from.
+    sampling_method : str
+        The sampling method to use ('permutazione' or 'resampling_con_reimmissione').
+    sim_length : int
+        The number of trades in each simulated path.
+    num_sims : int
+        The total number of simulations to run.
+
+    Returns
+    -------
+    np.ndarray
+        A 2D array of shape (num_sims, sim_length) containing sampled trade returns.
+
+    Raises
+    ------
+    ValueError
+        If an invalid sampling method is provided.
+
+    """
+    if sampling_method == MESSAGES.get("monte_carlo_sampling_methods", [])[1]:
+        # Permutation: create `num_sims` random permutations of the original trades.
+        # This is vectorized by tiling the original array and permuting each row.
+        rng = np.random.default_rng()
+        tiled_returns = np.tile(trades, (num_sims, 1))
+        permuted_returns = rng.permuted(tiled_returns, axis=1)
+        sampled_returns = permuted_returns[:, :sim_length]
+    elif sampling_method == MESSAGES.get("monte_carlo_sampling_methods", [])[0]:
+        # Bootstrap resampling: sample with replacement.
+        sampled_returns = np.random.choice(trades, size=(num_sims, sim_length), replace=True)
+    else:
+        messages = MESSAGES.get("display_texts", {}).get("messages", {})
+        raise ValueError(
+            messages.get("mc_invalid_sampling_method", "Invalid sampling method: '{method}'.").format(
+                method=sampling_method
+            )
+        )
+
+    return sampled_returns
 
 
 def _adjust_simulation_length(sampling_method: str, sim_length: int, num_trades: int) -> int:
@@ -27,11 +177,11 @@ def _adjust_simulation_length(sampling_method: str, sim_length: int, num_trades:
         st.warning(messages.get("mc_negative_sim_length_warning", "Simulation length must be non-negative."))
         return num_trades
 
-    if sampling_method == "resampling_con_reimmissione":
+    if sampling_method == MESSAGES.get("monte_carlo_sampling_methods", [])[0]:
         # If 0, use the original number of trades. Otherwise, use the specified length.
         return sim_length if sim_length > 0 else num_trades
 
-    if sampling_method == "permutazione":
+    if sampling_method == MESSAGES.get("monte_carlo_sampling_methods", [])[1]:
         # For permutation, length cannot be >= num_trades, as final equity would be identical.
         # A common practice is to use a slightly smaller length if the user's choice is invalid.
         if sim_length >= num_trades:
@@ -49,12 +199,12 @@ def _adjust_simulation_length(sampling_method: str, sim_length: int, num_trades:
     return sim_length
 
 
-def run_montecarlo(
-    ticker: str,
+def add_montecarlo_stats(
     trades: pd.Series,
+    ticker: str,
     original_stats: pd.Series,
     initial_capital: float,
-    benchmark: pd.Series | None,
+    benchmark: pd.Series,
     sampling_method: str,
     sim_length: int,
     num_sims: int,
@@ -148,14 +298,14 @@ def _run_montecarlo_simulations(
 
     """
     # --- 1. Generate Sampled Trade Returns ---
-    if sampling_method == "permutazione":
+    if sampling_method == MESSAGES.get("monte_carlo_sampling_methods", [])[1]:
         # Permutation: create `num_sims` random permutations of the original trades.
         # This is vectorized by tiling the original array and permuting each row.
         rng = np.random.default_rng()
         tiled_returns = np.tile(trade_returns_array, (num_sims, 1))
         permuted_returns = rng.permuted(tiled_returns, axis=1)
         sampled_returns = permuted_returns[:, :sim_length]
-    elif sampling_method == "resampling_con_reimmissione":
+    elif sampling_method == MESSAGES.get("monte_carlo_sampling_methods", [])[0]:
         # Bootstrap resampling: sample with replacement.
         sampled_returns = np.random.choice(trade_returns_array, size=(num_sims, sim_length), replace=True)
     else:
@@ -220,7 +370,7 @@ def _build_metrics_percentiles_df(metrics_data: dict, original_stats: pd.Series)
                       originale/percentile come indice.
 
     """
-    percentiles_to_calc = [50, 80, 90, 95, 99]
+    percentiles_to_calc = MESSAGES["monte_carlo_percentiles"]
     index_names = ["Originale"] + [f"Livello {p}%" for p in percentiles_to_calc]
 
     data_for_df = {}
@@ -285,7 +435,7 @@ def _process_single_mc_combination(
         return strategy_params
 
     # Run the main MC simulation for this combination
-    run_montecarlo(
+    add_montecarlo_stats(
         ticker=ticker,
         trades=pd.Series(trades_for_this_comb),
         initial_capital=ss.initial_capital_wid,
@@ -347,7 +497,7 @@ def run_montecarlos_for_best_combs(
         return
 
     is_higher_better = MESSAGES.get("optimization_settings", {}).get("objectives", {}).get(obj_col, True)
-    sorted_combs = ranking_df.sort_values(by=obj_col, ascending=not is_higher_better)
+    sorted_combs = ranking_df.sort_values(by=("BT Stats", obj_col), ascending=not is_higher_better)
     num_to_promote = ss.get("mc_promoted_combs_wid", 10)
     best_combs = sorted_combs.head(num_to_promote)
 

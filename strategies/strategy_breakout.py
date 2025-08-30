@@ -1,38 +1,28 @@
 # strategies/strategy_breakout.py
 
-from typing import Any, Callable, Dict, List, Literal, Optional  # Added List, Dict, Any
+from collections.abc import Callable  # Added List, Dict, Any
+from typing import Any, ClassVar
 
 import pandas as pd
-import pandas_ta as ta
-from backtesting import Strategy
-from backtesting.lib import crossover
 
-from strategies.common_strategy import CommonStrategy  # Importa la strategia base
+from strategies.common_strategy import CommonStrategy  # Importa la base strategy
 
 
-# La strategia Crossover di Medie Mobili
 class BreakoutStrategy(CommonStrategy):
-    """
-    Strategia di Breakout basata sui massimi/minimi di N periodi come Supporti e Resistenze dinamici.
-    Acquista quando il prezzo di chiusura supera il livello di Resistenza (massimo più alto degli ultimi 'lookback_period' barre).
-    Vende (o chiude la posizione) quando il prezzo di chiusura scende sotto il livello di Supporto (minimo più basso
-    degli ultimi 'lookback_period' barre).
-    """
+    """Breakout strategy based on dynamic support and resistance levels."""
 
-    # Parametri della strategia
-    lookback_period = 20  # Numero di barre da considerare per calcolare i livelli di Supporto e Resistenza
+    # Strategy parameters
+    lookback_period: int = 20  # Number of bars to consider for calculating support and resistance levels
 
-    # Nome per visualizzazione
-    DISPLAY_NAME = "Breakout supporti/resistenze"
+    # Name for display
+    DISPLAY_NAME = "Breakout Supports/Resistances"
 
-    # Vincolo di ottimizzazione: n1 deve essere minore di n2
-    optimization_constraint: Optional[Callable[[pd.Series], bool]] = (
-        lambda s: s.lookback_period > 1
-    )
+    # Optimization constraint: lookback_period should be greater than 1
+    optimization_constraint: Callable[[pd.Series], bool] | None = lambda s: s.lookback_period > 1
 
-    # Definizione dei parametri per la UI e l'ottimizzazione
-    # Questa lista sovrascrive PARAMS_INFO da CommonStrategy
-    PARAMS_INFO: List[Dict[str, Any]] = [
+    # Definition of parameters for UI and optimization
+    # This list overrides PARAMS_INFO from CommonStrategy
+    PARAMS_INFO: ClassVar[list[dict[str, Any]]] = [
         {
             "name": "lookback_period",
             "type": int,
@@ -43,9 +33,10 @@ class BreakoutStrategy(CommonStrategy):
             "max": 50,
             "step": 1,
         },
-        # SL/TP parameters - Puoi lasciare i valori di default da CommonStrategy o personalizzarli qui
+        # Stop Loss and Take Profit parameters
+        # You can keep default values from CommonStrategy or customize them here
         {
-            "name": "sl_percent",
+            "name": "sl_pct",
             "type": float,
             "default": 0.05,
             "lowest": 0.00,
@@ -55,7 +46,7 @@ class BreakoutStrategy(CommonStrategy):
             "step": 0.005,
         },
         {
-            "name": "tp_percent",
+            "name": "tp_pct",
             "type": float,
             "default": 0.00,
             "lowest": 0.00,
@@ -67,52 +58,41 @@ class BreakoutStrategy(CommonStrategy):
     ]
 
     def init(self) -> None:
-        """
-        Inizializza la strategia. Pre-calcola i livelli di Resistenza e Supporto dinamici
-        sui 'lookback_period' barre precedenti.
-        """
-        # Il massimo mobile del periodo funge da Resistenza dinamica.
-        # Utilizziamo self.I per registrare l'indicatore che verrà aggiornato automaticamente ad ogni tick.
+        """Initialize the strategy. Pre-calculate dynamic support and resistance levels on the previous 'lookback_period' bars."""
+        # The maximum mobile period serves as a dynamic resistance level.
+        # We use self.I to register the indicator that will be updated automatically at each tick.
         self.resistance_level = self.I(
-            lambda data: pd.Series(data)
-            .shift(1)
-            .rolling(int(self.lookback_period))
-            .max(),
+            lambda data: pd.Series(data).shift(1).rolling(int(self.lookback_period)).max(),
             self.data.High,
         )
 
-        # Il minimo mobile del periodo funge da Supporto dinamico.
+        # The minimum mobile period serves as a dynamic support level.
         self.support_level = self.I(
-            lambda data: pd.Series(data)
-            .shift(1)
-            .rolling(int(self.lookback_period))
-            .min(),
+            lambda data: pd.Series(data).shift(1).rolling(int(self.lookback_period)).min(),
             self.data.Low,
         )
 
     def next(self) -> None:
-        """
-        Implementa la logica di trading per ogni nuova barra di dati.
-        """
-        # Assicurati di avere abbastanza dati per il calcolo dei livelli di Supporto/Resistenza
+        """Implement trading logic for each new data bar."""
+        # Ensure we have enough data to calculate support and resistance levels
         if len(self.data.Close) < self.lookback_period:
             return
 
         current_close = self.data.Close[-1]
 
-        # Accedi ai valori pre-calcolati dei livelli per la barra corrente
+        # Access the pre-calculated support and resistance levels for the current bar
         current_resistance = self.resistance_level[-1]
         current_support = self.support_level[-1]
 
-        # Logica di acquisto:
-        # Se il prezzo di chiusura corrente supera il livello di Resistenza dinamica
-        # E non abbiamo una posizione aperta (per un breakout rialzista).
+        # Buy logic:
+        # If the current closing price exceeds the dynamic resistance level
+        # And we don't have an open position (for a breakout).
         if current_close > current_resistance and not self.position:
             self._buy_long()
 
-        # Logica di vendita/chiusura della posizione:
-        # Se abbiamo una posizione long aperta
-        # E il prezzo di chiusura corrente scende al di sotto del livello di Supporto dinamico
-        # (indicando un breakout ribassista o un'inversione di tendenza).
+        # Sell/close position logic:
+        # If we have an open long position
+        # And the current closing price falls below the dynamic support level
+        # (indicating a breakout fall or a trend reversal).
         elif self.position and current_close < current_support:
             self._close_position()
